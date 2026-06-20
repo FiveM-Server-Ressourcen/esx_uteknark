@@ -2,14 +2,16 @@
      Spawns wild weed props at server-decided positions.
      No blips, no markers, no map hints.
      Players who walk close enough will see a press-E prompt.
+
+     Uses _uteknark_near_plant (global set by cl_uteknark.lua) so both
+     scripts never fight over the same lib.showTextUI slot.
 --]]
 
-local wildWeeds  = {}   -- { index, pos, strain, object }
-local inWild     = false
+local wildWeeds      = {}    -- { index, pos, strain, object }
+local inWild         = false
+local wildUiShowing  = false -- tracks whether we own the TextUI
 
--- ── Helpers ───────────────────────────────────────────────────────────────
-
-local ANIM_PICKUP = { dict = 'pickup_object', clip = 'pickup_low', flag = 1 }
+-- ── ox_lib wrapper ────────────────────────────────────────────────────────
 
 local function notify(msg, ntype)
     lib.notify({
@@ -29,12 +31,13 @@ local function getStrainName(strain)
     return (Config.Strains[strain] and Config.Strains[strain].name) or strain
 end
 
--- ── Prop spawner ──────────────────────────────────────────────────────────
+-- ── Prop helpers ──────────────────────────────────────────────────────────
 
 local function spawnWildProp(entry)
+    if entry.object then return end
     local model = getWildProp(entry.strain)
     if not IsModelValid(model) then
-        Citizen.Trace('Wild weed: invalid model for strain ' .. tostring(entry.strain) .. '\n')
+        Citizen.Trace('WildWeed: invalid model for ' .. tostring(entry.strain) .. '\n')
         return
     end
     if not HasModelLoaded(model) then
@@ -61,7 +64,7 @@ local function deleteWildProp(entry)
     entry.object = nil
 end
 
--- ── Find entry by index ───────────────────────────────────────────────────
+-- ── Index lookup ──────────────────────────────────────────────────────────
 
 local function findWild(index)
     for i, w in ipairs(wildWeeds) do
@@ -70,19 +73,20 @@ local function findWild(index)
     return nil, nil
 end
 
--- ── Server → Client events ────────────────────────────────────────────────
+-- ── Server → Client sync events ───────────────────────────────────────────
 
 RegisterNetEvent('esx_uteknark:wild_data')
 AddEventHandler('esx_uteknark:wild_data', function(list)
-    -- Clear existing
     for _, w in ipairs(wildWeeds) do deleteWildProp(w) end
     wildWeeds = {}
-
     for _, entry in ipairs(list) do
-        local w = { index = entry.index, pos = entry.pos, strain = entry.strain, object = nil }
-        table.insert(wildWeeds, w)
+        table.insert(wildWeeds, {
+            index  = entry.index,
+            pos    = entry.pos,
+            strain = entry.strain,
+            object = nil,
+        })
     end
-    -- Props are spawned lazily in the interaction loop as player gets close
 end)
 
 RegisterNetEvent('esx_uteknark:wild_remove')
@@ -97,15 +101,26 @@ end)
 RegisterNetEvent('esx_uteknark:wild_spawn')
 AddEventHandler('esx_uteknark:wild_spawn', function(entry)
     local _, existing = findWild(entry.index)
-    if existing then return end -- already there
-    table.insert(wildWeeds, { index = entry.index, pos = entry.pos, strain = entry.strain, object = nil })
+    if existing then return end
+    table.insert(wildWeeds, {
+        index  = entry.index,
+        pos    = entry.pos,
+        strain = entry.strain,
+        object = nil,
+    })
 end)
 
--- ── Collection action ─────────────────────────────────────────────────────
+-- ── Collection ────────────────────────────────────────────────────────────
 
 local function collectWild(wild)
     if inWild then return end
     inWild = true
+
+    -- Hide TextUI before starting the action
+    if wildUiShowing then
+        lib.hideTextUI()
+        wildUiShowing = false
+    end
 
     Citizen.CreateThread(function()
         -- Optional skillcheck minigame
@@ -116,13 +131,12 @@ local function collectWild(wild)
             return
         end
 
-        -- Progress bar with animation
         local ok = lib.progressBar({
             duration  = Config.WildWeed.CollectTime,
             label     = _U('wild_progress', getStrainName(wild.strain)),
             canCancel = true,
             disable   = { move = true, car = true, combat = true },
-            anim      = ANIM_PICKUP,
+            anim      = { dict = 'pickup_object', clip = 'pickup_low', flag = 1 },
         })
         inWild = false
         if ok then
@@ -137,15 +151,17 @@ local function collectWild(wild)
     end)
 end
 
--- ── Draw distance / lazy spawn loop ──────────────────────────────────────
+-- ── Main loop: prop management + interaction ──────────────────────────────
 
 local SPAWN_DIST   = Config.Distance.Draw
 local COLLECT_DIST = Config.Distance.Interact
+local prevNearWild = false -- tracks last state for efficient TextUI updates
 
 Citizen.CreateThread(function()
     while true do
         local playerPed = PlayerPedId()
         local myLoc     = GetEntityCoords(playerPed)
+        local inVeh     = IsPedInAnyVehicle(playerPed)
 
         local closest     = nil
         local closestDist = math.huge
@@ -153,11 +169,11 @@ Citizen.CreateThread(function()
         for _, w in ipairs(wildWeeds) do
             local dist = #(w.pos - myLoc)
 
-            -- Spawn prop if within draw distance and not already spawned
+            -- Lazy spawn within draw range
             if dist <= SPAWN_DIST and not w.object then
                 spawnWildProp(w)
             end
-            -- Despawn if out of draw range
+            -- Despawn when out of range
             if dist > SPAWN_DIST * 1.1 and w.object then
                 deleteWildProp(w)
             end
@@ -168,40 +184,58 @@ Citizen.CreateThread(function()
             end
         end
 
-        -- Interact with closest wild plant
-        if closest and closestDist <= COLLECT_DIST and not IsPedInAnyVehicle(playerPed) then
-            if not inWild then
-                lib.showTextUI(_U('press_e_wild', getStrainName(closest.strain)), {
-                    position = 'left-center',
-                    icon     = 'leaf',
-                })
-                if IsControlJustPressed(0, 38) then -- E
-                    lib.hideTextUI()
-                    collectWild(closest)
-                end
+        -- Determine if we should show wild-weed TextUI.
+        -- Only show when: close enough, not in vehicle, no planted-plant UI is active,
+        -- no wild action in progress.
+        local nearWild = (
+            closest and
+            closestDist <= COLLECT_DIST and
+            not inVeh and
+            not inWild and
+            not _uteknark_near_plant -- respect planted plant priority
+        )
+
+        if nearWild and not prevNearWild then
+            -- Just entered range → show TextUI
+            lib.showTextUI(_U('press_e_wild', getStrainName(closest.strain)), {
+                position = 'left-center',
+                icon     = 'leaf',
+            })
+            wildUiShowing = true
+            prevNearWild  = true
+        elseif not nearWild and prevNearWild then
+            -- Just left range → hide TextUI (only if we own it)
+            if wildUiShowing then
+                lib.hideTextUI()
+                wildUiShowing = false
             end
-        else
-            if not inWild then lib.hideTextUI() end
+            prevNearWild = false
+        end
+
+        -- E key press handling
+        if nearWild and IsControlJustPressed(0, 38) then
+            collectWild(closest)
         end
 
         Citizen.Wait(#wildWeeds > 0 and 0 or 500)
     end
 end)
 
--- ── Request wild weed data from server once session is ready ───────────────
+-- ── Request wild weed data once session is ready ──────────────────────────
 
 Citizen.CreateThread(function()
     while not NetworkIsSessionStarted() do Citizen.Wait(100) end
-    Citizen.Wait(2000) -- slight delay so server is ready
+    Citizen.Wait(2500)
     TriggerServerEvent('esx_uteknark:request_wild')
 end)
 
 -- ── Cleanup ───────────────────────────────────────────────────────────────
 
 AddEventHandler('onResourceStop', function(name)
-    if name == GetCurrentResourceName() then
-        for _, w in ipairs(wildWeeds) do deleteWildProp(w) end
-        wildWeeds = {}
-        lib.hideTextUI()
-    end
+    if name ~= GetCurrentResourceName() then return end
+    for _, w in ipairs(wildWeeds) do deleteWildProp(w) end
+    wildWeeds = {}
+    if wildUiShowing then lib.hideTextUI() end
+    wildUiShowing = false
+    prevNearWild  = false
 end)

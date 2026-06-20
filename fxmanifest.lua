@@ -1,9 +1,9 @@
 fx_version 'cerulean'
-game 'gta5'
+game      'gta5'
 
-description 'ESX UteKnark - Extended Weed System'
-version '2.0.0'
-author 'DemmyDemon (extended)'
+description 'ESX UteKnark – Extended Weed System'
+version     '2.0.0'
+author      'DemmyDemon (extended)'
 
 shared_scripts {
     '@ox_lib/init.lua',
@@ -17,8 +17,8 @@ shared_scripts {
 
 client_scripts {
     'lib/debug.lua',
-    'lib/wildweed.lua',
     'cl_uteknark.lua',
+    'cl_wildweed.lua',
 }
 
 server_scripts {

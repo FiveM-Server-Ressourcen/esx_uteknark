@@ -1,91 +1,137 @@
-# UteKnark (esx_uteknark)
+# UteKnark (esx_uteknark) — Extended Edition
 
-A FiveM resource for ESX-based GTA V roleplay servers. Extended weed growing system with multiple strains, wild weed, quality system, and ox_lib integration.
+A FiveM resource for ESX-based GTA V roleplay servers.  
+Players can grow multiple weed strains anywhere on the map, discover wild weed in the world, and manage quality through watering and fertilizing.
 
 ## Project Type
 
-This is a **FiveM Lua resource** — not a web application. It has no build system, no package manager, and no runnable server. It is deployed by dropping the files into a FiveM server's `resources/` directory.
+**FiveM Lua resource** — not a web application.  
+No build system, no package manager, no runnable server.  
+Deploy by dropping this folder into your FiveM server's `resources/` directory.
+
+---
 
 ## Tech Stack
 
-- **Language:** Lua (FiveM client/server scripting)
-- **Framework:** ESX (`es_extended`)
-- **Database:** MySQL via `mysql-async`
-- **UI/UX:** `ox_lib` (notifications, progress bars, context menus, skill checks)
-- **Platform:** FiveM (GTA V modding framework)
+| Layer     | Technology                          |
+|-----------|-------------------------------------|
+| Language  | Lua (FiveM client/server scripting) |
+| Framework | ESX (`es_extended`)                 |
+| Database  | MySQL via `mysql-async`             |
+| UI / UX   | `ox_lib` (progress bars, menus, skillchecks, notifications) |
+| Platform  | FiveM (GTA V modding framework)     |
+
+---
 
 ## Installation (on a FiveM server)
 
 1. Clone/copy this directory and name it `esx_uteknark`
-2. Place it in your FiveM server's `resources/` directory
+2. Place it in `resources/`
 3. Add `ensure esx_uteknark` to `server.cfg`
-4. Import `esx_uteknark.sql` into your MySQL database
-5. Add all required items to your ESX items table (see Items section below)
-6. Edit `config.lua` to configure strains, wild weed positions, etc.
-7. Restart or refresh the resource
+4. Import `esx_uteknark.sql` into your MySQL database  
+   ⚠️ This **drops and recreates** the `uteknark` table — backup first on upgrades!
+5. Add all seed items, `flower_pot`, `fertilizer`, and water items to your ESX items table
+6. Edit `config.lua` to configure strains, positions, timings, etc.
+7. Restart the resource
 
-## Dependencies (must be installed on the FiveM server)
+---
+
+## Dependencies (must be running on the FiveM server)
 
 - [es_extended](https://github.com/ESX-Org/es_extended)
 - [mysql-async](https://github.com/brouznouf/fivem-mysql-async)
-- [ox_lib](https://github.com/overextended/ox_lib) ← Neu in v2.0
+- [ox_lib](https://github.com/overextended/ox_lib)
 
-## Required ESX Items (in your items table)
-
-For each strain:
-- `og_kush_seed`, `og_kush_weed`
-- `purple_haze_seed`, `purple_haze_weed`
-- `amnesia_seed`, `amnesia_weed`
-- `white_widow_seed`, `white_widow_weed`
-
-Sonstige:
-- `flower_pot` — Blumentopf (Pflanzvoraussetzung)
-- `water_bottle` / `watering_can` — Wasser-Items
-- `fertilizer` — Dünger
-
-## Neue Features v2.0
-
-- **Überall pflanzen** — kein Bodenmaterial-System mehr
-- **4 Weed-Sorten** — OG Kush, Purple Haze, Amnesia, White Widow (erweiterbar via Config)
-- **Wild Weed System** — zufällige Spawns ohne Blips/Marker
-- **Qualitätssystem** — 1–5 Sterne basierend auf Pflege
-- **ox_lib Integration** — Animationen, Progressbars, Kontextmenü, Minigame
-- **Gießen & Düngen** — beliebig viele Items konfigurierbar
+---
 
 ## File Structure
 
-- `fxmanifest.lua` — FiveM Resource-Manifest (v2, ersetzt `__resource.lua`)
-- `config.lua` — Alle konfigurierbaren Einstellungen
-- `cl_uteknark.lua` — Client-Script
-- `sv_uteknark.lua` — Server-Script
-- `lib/growth.lua` — Wachstums-Hilfsfunktionen
-- `lib/cropstate.lua` — Datenhaltung (Octree + MySQL)
-- `lib/octree.lua` — Räumliche Partitionierung (unverändert)
-- `lib/debug.lua` — Debug-Helfer (unverändert)
-- `lib/wildweed.lua` — Wild-Weed-System (Client)
-- `locales/` — Sprachdateien
-- `esx_uteknark.sql` — Datenbankschema
-
-## Adding New Strains
-
-Nur in `config.lua` unter `Config.Strains` einen neuen Eintrag hinzufügen:
-```lua
-my_strain = {
-    name       = 'My Strain',
-    seed       = 'my_strain_seed',    -- ESX Item-Name
-    product    = 'my_strain_weed',    -- ESX Item-Name
-    yield      = {3, 5},
-    seedReturn = {1, 3},
-    stages = {
-        { label='Keimling', model=`prop_weed_02`, offset=vector3(0,0,-1.0), time=30 },
-        { label='Wachstum', model=`prop_weed_02`, offset=vector3(0,0,-0.6), time=120 },
-        { label='Blüte',    model=`prop_weed_01`, offset=vector3(0,0,-0.3), time=240 },
-        { label='Erntereif',model=`prop_weed_01`, offset=vector3(0,0,0),    time=120, harvest=true },
-    },
-},
 ```
-Dann das Item in ESX anlegen und ggf. zum Wild-Weed-System unter `Config.WildWeed.StrainChances` hinzufügen.
+esx_uteknark/
+├── fxmanifest.lua          Modern FiveM resource manifest (used by current FiveM)
+├── __resource.lua          Legacy manifest (fallback for very old servers)
+├── config.lua              All configurable values
+├── cl_uteknark.lua         Client: planted plant rendering & interaction (ox_lib menus)
+├── cl_wildweed.lua         Client: wild weed spawning & collection
+├── sv_uteknark.lua         Server: planting, watering, fertilizing, harvest, growth tick
+├── esx_uteknark.sql        Database schema (run once on install)
+├── lib/
+│   ├── octree.lua          Spatial index for planted plants
+│   ├── growth.lua          Growth stage definitions + GetPlantModel() helper
+│   ├── cropstate.lua       Plant state: DB persistence, octree, network events
+│   └── debug.lua           Debug overlay (client only)
+└── locales/
+    ├── en-US.lua           English strings
+    └── sv-SE.lua           Swedish strings
+```
+
+---
+
+## Features
+
+### Planting System
+- Plants can be placed **anywhere** on the map (no soil/terrain restrictions)
+- Requires: **seed item** (strain-specific) + **flower pot** item
+- Plants persist across server restarts (stored in MySQL)
+
+### Weed Strains (via config)
+| Strain       | Seed Item          | Growth Speed |
+|--------------|--------------------|--------------|
+| OG Kush      | `og_kush_seed`     | Standard     |
+| Purple Haze  | `purple_haze_seed` | 20 % faster  |
+| Amnesia      | `amnesia_seed`     | 25 % slower  |
+| White Widow  | `white_widow_seed` | 10 % slower  |
+
+Add new strains by adding a block to `Config.Strains` — nothing else needed.
+
+### Quality System (1–5 ★)
+Harvest quality depends on:
+- Watering count (40 % weight)
+- Fertilizer applications (40 % weight)
+- Tending care bonus (20 % weight)
+
+### Wild Weed System
+- Positions configured in `Config.WildWeed.Positions`
+- On server start each position has a configurable spawn chance
+- Strain is selected randomly by weighted probabilities
+- **No blips, no markers, no map hints**
+- Players collect seeds via ox_lib progress bar + skillcheck minigame
+- Positions respawn after a configurable cooldown
+
+### Care Actions (all use ox_lib)
+| Action     | Key  | Requires         | ox_lib used            |
+|------------|------|------------------|------------------------|
+| Plant menu | E    | near planted plant | Context menu          |
+| Water      | menu | water item       | Progress bar + animation |
+| Fertilize  | menu | fertilizer item  | Progress bar + animation |
+| Tend/Harvest | menu | —              | Progress bar + animation |
+| Destroy    | menu | —                | Progress bar + animation |
+| Wild collect | E  | near wild plant  | Skillcheck + progress bar |
+
+---
+
+## Config Quick Reference
+
+```lua
+Config.FlowerPot      = 'flower_pot'
+Config.WaterItems     = { 'water_bottle', 'watering_can' }
+Config.FertilizerItem = 'fertilizer'
+
+Config.Strains.og_kush = {
+    name = 'OG Kush', seed = 'og_kush_seed', product = 'weed_og_kush',
+    prop_young = ..., prop_mature = ..., timeMultiplier = 1.0,
+    yield = {3,5}, seedReturn = {1,3},
+}
+
+Config.WildWeed.SpawnChance = 0.65
+Config.WildWeed.Positions   = { vector4(x,y,z,h), ... }
+Config.WildWeed.StrainWeights = {
+    { strain = 'og_kush', weight = 40 }, ...
+}
+```
+
+---
 
 ## User Preferences
 
-- Keine spezifischen Präferenzen bisher.
+- No specific preferences recorded yet.

@@ -2,49 +2,182 @@ Config = {
     Locale = 'en-US',
 
     Distance = {
-        Draw     = 150.0, -- Meter: Sichtweite für Pflanzen
-        Interact = 2.0,   -- Meter: Interaktionsdistanz
-        Space    = 1.2,   -- Meter: Mindestabstand zwischen Pflanzen
-        Above    = 5.0,   -- Meter: Freiraum über der Pflanzposition
+        Draw     = 150.0, -- Render distance for planted props (m)
+        Interact = 2.0,   -- Interaction range (m)
+        Space    = 1.5,   -- Minimum distance between planted plants (m)
     },
 
-    SetLOD         = false,
-    MaxGroundAngle = 0.6,  -- Max. Neigung des Bodens zum Pflanzen
-    TimeMultiplier = 1.0,  -- Globaler Wachstumszeit-Multiplikator (1.0 = normal)
+    SetLOD = false,
 
-    -- Item das zum Pflanzen zusätzlich zum Samen benötigt wird
-    FlowerPot = 'flower_pot',
-
-    -- Alle gültigen Wasser-Items (beliebig viele eintragen)
-    WaterItems = {
-        'water_bottle',
-        'watering_can',
-    },
-
-    -- Dünger-Item
+    -- ─────────────────────────────────────────────
+    --  ITEMS
+    -- ─────────────────────────────────────────────
+    FlowerPot      = 'flower_pot',
+    WaterItems     = { 'water_bottle', 'watering_can' },
     FertilizerItem = 'fertilizer',
 
-    -- Qualitätsberechnung (1–5 Sterne)
-    -- Basiert auf Anzahl der Bewässerungen und Düngungen
-    -- Stern wird vergeben wenn Schwellwert erreicht/überschritten
+    -- How much each action adds (0-100 scale)
+    WaterPerAction = 30.0,   -- +30% water when player waters
+    FertPerAction  = 35.0,   -- +35% fertilizer when player fertilizes
+
+    -- ─────────────────────────────────────────────
+    --  DECAY & GROWTH SYSTEM
+    --  All rates are per real-world minute.
+    -- ─────────────────────────────────────────────
+    Decay = {
+        TickInterval        = 60,   -- Server processes plants every N seconds
+        WaterPerMinute      = 1.5,  -- % water lost per minute
+        FertPerMinute       = 0.8,  -- % fertilizer lost per minute
+
+        -- Health mechanics
+        HealthThreshold     = 25,   -- avg care below this → health decays
+        HealthGoodThreshold = 55,   -- avg care above this → health regens
+        HealthDecayRate     = 2.0,  -- % health lost per minute when neglected
+        HealthRegenRate     = 0.8,  -- % health gained per minute when well-cared
+        MinHealthForGrowth  = 15,   -- plant must have > this health to grow
+
+        -- Growth
+        -- GrowthRateBase / timeMultiplier = actual rate at perfect care
+        -- Default: 0.15 %/min → ~11 h at perfect care, longer with neglect
+        GrowthRateBase      = 0.15,
+    },
+
+    -- ─────────────────────────────────────────────
+    --  QUALITY SYSTEM  (internal, never shown to player)
+    --  Accumulated as exponential moving average.
+    -- ─────────────────────────────────────────────
     Quality = {
-        Water = {
-            [1] = 0,  -- 1 Stern: 0+ Bewässerungen
-            [2] = 2,  -- 2 Sterne: 2+
-            [3] = 4,  -- 3 Sterne: 4+
-            [4] = 6,  -- 4 Sterne: 6+
-            [5] = 8,  -- 5 Sterne: 8+
+        WaterWeight  = 0.40,
+        FertWeight   = 0.40,
+        HealthWeight = 0.20,
+        EmaAlpha     = 0.08,  -- smoothing factor (lower = slower to change)
+
+        -- Quality affects wet-weed yield at harvest:
+        -- actualYield = floor( baseYield * (MinYieldMult + quality * YieldRange) )
+        MinYieldMult = 0.50,  -- worst quality gives 50% of max yield
+        YieldRange   = 0.50,  -- best quality gives 100% of max yield
+    },
+
+    -- ─────────────────────────────────────────────
+    --  DRYING SYSTEM
+    -- ─────────────────────────────────────────────
+    DryingTime = 300,  -- seconds for one drying session
+
+    DryingStations = {
+        { pos = vector3( 1135.2,  -470.2,  67.0), name = 'Warehouse District' },
+        { pos = vector3(-1819.7,  801.0,  138.0), name = 'Paleto Bay Barn'    },
+        { pos = vector3( 2565.6, 3806.2,  44.0 ), name = 'Sandy Shores'       },
+    },
+
+    -- ─────────────────────────────────────────────
+    --  WEED STRAINS
+    --  Add new strains here – nothing else to change.
+    -- ─────────────────────────────────────────────
+    Strains = {
+        og_kush = {
+            name           = 'OG Kush',
+            seed           = 'og_kush_seed',
+            wet_product    = 'wet_og_kush',   -- Item given on harvest
+            dry_product    = 'weed_og_kush',  -- Item given after drying
+            prop_young     = `prop_weed_02`,
+            prop_mature    = `prop_weed_01`,
+            timeMultiplier = 1.00,            -- 1.0 = standard speed
+            yield          = { 3, 6 },        -- base wet-weed yield range
+            seedReturn     = { 1, 3 },
         },
-        Fertilizer = {
-            [1] = 0,  -- 1 Stern: 0+ Düngungen
-            [2] = 1,  -- 2 Sterne: 1+
-            [3] = 2,  -- 3 Sterne: 2+
-            [4] = 3,  -- 4 Sterne: 3+
-            [5] = 4,  -- 5 Sterne: 4+
+        purple_haze = {
+            name           = 'Purple Haze',
+            seed           = 'purple_haze_seed',
+            wet_product    = 'wet_purple_haze',
+            dry_product    = 'weed_purple_haze',
+            prop_young     = `prop_weed_02`,
+            prop_mature    = `prop_weed_01`,
+            timeMultiplier = 0.80,            -- 20 % faster
+            yield          = { 3, 5 },
+            seedReturn     = { 1, 3 },
+        },
+        amnesia = {
+            name           = 'Amnesia',
+            seed           = 'amnesia_seed',
+            wet_product    = 'wet_amnesia',
+            dry_product    = 'weed_amnesia',
+            prop_young     = `prop_weed_02`,
+            prop_mature    = `prop_weed_01`,
+            timeMultiplier = 1.25,            -- 25 % slower, better potential
+            yield          = { 4, 7 },
+            seedReturn     = { 1, 3 },
+        },
+        white_widow = {
+            name           = 'White Widow',
+            seed           = 'white_widow_seed',
+            wet_product    = 'wet_white_widow',
+            dry_product    = 'weed_white_widow',
+            prop_young     = `prop_weed_02`,
+            prop_mature    = `prop_weed_01`,
+            timeMultiplier = 1.10,
+            yield          = { 3, 6 },
+            seedReturn     = { 1, 3 },
         },
     },
 
-    -- Verbrennungseffekt beim Vernichten
+    -- ─────────────────────────────────────────────
+    --  WILD WEED SYSTEM
+    -- ─────────────────────────────────────────────
+    WildWeed = {
+        SpawnChance  = 0.65,
+        RespawnTime  = 3600,  -- seconds before a spot can respawn
+        CollectTime  = 6000,  -- ms for collection progress bar
+        SeedReward   = { 1, 3 },
+
+        StrainWeights = {
+            { strain = 'og_kush',     weight = 40 },
+            { strain = 'purple_haze', weight = 30 },
+            { strain = 'amnesia',     weight = 20 },
+            { strain = 'white_widow', weight = 10 },
+        },
+
+        StrainProps = {
+            og_kush     = `prop_weed_01`,
+            purple_haze = `prop_weed_01`,
+            amnesia     = `prop_weed_01`,
+            white_widow = `prop_weed_01`,
+        },
+
+        -- Add as many positions as you like: vector4(x, y, z, heading)
+        Positions = {
+            vector4(-1155.94, 4939.26, 221.65,   0.0),
+            vector4(-1200.00, 4980.00, 225.00,  45.0),
+            vector4(-1100.00, 4900.00, 220.00,  90.0),
+            vector4( 2700.00, 3280.00,  55.00, 180.0),
+            vector4( 2750.00, 3310.00,  57.00, 270.0),
+            vector4( 1280.00, 6420.00,  35.00,   0.0),
+            vector4( 1310.00, 6400.00,  34.00,  30.0),
+            vector4(  400.00, 6510.00,  31.00,  60.0),
+            vector4(  430.00, 6530.00,  31.50, 120.0),
+            vector4( -350.00, 6210.00,  31.00, 200.0),
+            vector4(  -70.00, 6220.00,  31.00, 330.0),
+            vector4(  100.00, 6350.00,  31.00,  15.0),
+            vector4( 2900.00, 3450.00,  58.00,  95.0),
+            vector4( 2850.00, 3390.00,  56.00, 175.0),
+            vector4(-1350.00, 4860.00, 225.00, 240.0),
+        },
+    },
+
+    -- ─────────────────────────────────────────────
+    --  ADMIN OVERVIEW  (/weedplants)
+    -- ─────────────────────────────────────────────
+    AdminBlips = {
+        PlantSprite = 469,
+        PlantColor  = 2,   -- GTA blip color: 2 = green
+        PlantScale  = 0.8,
+        WildSprite  = 469,
+        WildColor   = 1,   -- GTA blip color: 1 = red
+        WildScale   = 0.6,
+    },
+
+    -- ─────────────────────────────────────────────
+    --  BURN EFFECT (when a plant is destroyed)
+    -- ─────────────────────────────────────────────
     Burn = {
         Enabled    = true,
         Collection = 'scr_mp_house',
@@ -53,217 +186,5 @@ Config = {
         Rotation   = vector3(0, 0, 0),
         Offset     = vector3(0, 0, 0.2),
         Duration   = 20000,
-    },
-
-    -- =========================================================
-    -- WEED SORTEN — neue Sorte einfach hier hinzufügen!
-    -- Jede Sorte braucht ein eigenes Samen-Item in ESX.
-    -- stages: time = Minuten bis zur nächsten Stage
-    --         harvest = true markiert die Ernte-Stage
-    -- =========================================================
-    Strains = {
-        og_kush = {
-            name       = 'OG Kush',
-            seed       = 'og_kush_seed',
-            product    = 'og_kush_weed',
-            yield      = {3, 5},   -- zufällig 3–5 Weed beim Ernten
-            seedReturn = {1, 3},   -- zufällig 1–3 Samen zurück
-            stages = {
-                {
-                    label  = 'Keimling',
-                    model  = `prop_weed_02`,
-                    offset = vector3(0, 0, -1.0),
-                    time   = 30,  -- 30 Minuten
-                },
-                {
-                    label  = 'Wachstum',
-                    model  = `prop_weed_02`,
-                    offset = vector3(0, 0, -0.6),
-                    time   = 120, -- 2 Stunden
-                },
-                {
-                    label  = 'Blüte',
-                    model  = `prop_weed_01`,
-                    offset = vector3(0, 0, -0.3),
-                    time   = 240, -- 4 Stunden
-                },
-                {
-                    label   = 'Erntereif',
-                    model   = `prop_weed_01`,
-                    offset  = vector3(0, 0, 0),
-                    time    = 120, -- Ernte-Fenster: 2 Stunden
-                    harvest = true,
-                },
-            },
-        },
-
-        purple_haze = {
-            name       = 'Purple Haze',
-            seed       = 'purple_haze_seed',
-            product    = 'purple_haze_weed',
-            yield      = {3, 5},
-            seedReturn = {1, 3},
-            stages = {
-                {
-                    label  = 'Keimling',
-                    model  = `prop_weed_02`,
-                    offset = vector3(0, 0, -1.0),
-                    time   = 40,
-                },
-                {
-                    label  = 'Wachstum',
-                    model  = `prop_weed_02`,
-                    offset = vector3(0, 0, -0.6),
-                    time   = 150,
-                },
-                {
-                    label  = 'Blüte',
-                    model  = `prop_weed_01`,
-                    offset = vector3(0, 0, -0.3),
-                    time   = 300,
-                },
-                {
-                    label   = 'Erntereif',
-                    model   = `prop_weed_01`,
-                    offset  = vector3(0, 0, 0),
-                    time    = 120,
-                    harvest = true,
-                },
-            },
-        },
-
-        amnesia = {
-            name       = 'Amnesia',
-            seed       = 'amnesia_seed',
-            product    = 'amnesia_weed',
-            yield      = {3, 5},
-            seedReturn = {1, 3},
-            stages = {
-                {
-                    label  = 'Keimling',
-                    model  = `prop_weed_02`,
-                    offset = vector3(0, 0, -1.0),
-                    time   = 35,
-                },
-                {
-                    label  = 'Wachstum',
-                    model  = `prop_weed_02`,
-                    offset = vector3(0, 0, -0.6),
-                    time   = 130,
-                },
-                {
-                    label  = 'Blüte',
-                    model  = `prop_weed_01`,
-                    offset = vector3(0, 0, -0.3),
-                    time   = 260,
-                },
-                {
-                    label   = 'Erntereif',
-                    model   = `prop_weed_01`,
-                    offset  = vector3(0, 0, 0),
-                    time    = 120,
-                    harvest = true,
-                },
-            },
-        },
-
-        white_widow = {
-            name       = 'White Widow',
-            seed       = 'white_widow_seed',
-            product    = 'white_widow_weed',
-            yield      = {3, 5},
-            seedReturn = {1, 3},
-            stages = {
-                {
-                    label  = 'Keimling',
-                    model  = `prop_weed_02`,
-                    offset = vector3(0, 0, -1.0),
-                    time   = 50,
-                },
-                {
-                    label  = 'Wachstum',
-                    model  = `prop_weed_02`,
-                    offset = vector3(0, 0, -0.6),
-                    time   = 180,
-                },
-                {
-                    label  = 'Blüte',
-                    model  = `prop_weed_01`,
-                    offset = vector3(0, 0, -0.3),
-                    time   = 360,
-                },
-                {
-                    label   = 'Erntereif',
-                    model   = `prop_weed_01`,
-                    offset  = vector3(0, 0, 0),
-                    time    = 120,
-                    harvest = true,
-                },
-            },
-        },
-    },
-
-    -- =========================================================
-    -- WILD WEED SYSTEM
-    -- Kein Blip, kein Marker, keine Map-Hinweise!
-    -- =========================================================
-    WildWeed = {
-        -- Chance, dass eine Pflanze an einer Position erscheint (0.0–1.0)
-        SpawnChance = 0.65,
-
-        -- Fortschrittsbalken-Dauer beim Einsammeln (Millisekunden)
-        CollectTime = 5000,
-
-        -- Minigame-Schwierigkeit: {'easy','easy','medium'} etc.
-        MinigameDifficulty = { 'easy', 'easy' },
-
-        -- Welche Sorten können wild spawnen und mit welcher Wahrscheinlichkeit?
-        -- chance-Werte müssen zusammen 100 ergeben!
-        StrainChances = {
-            { strain = 'og_kush',     chance = 40, prop = `prop_weed_01` },
-            { strain = 'purple_haze', chance = 30, prop = `prop_weed_02` },
-            { strain = 'amnesia',     chance = 20, prop = `prop_weed_01` },
-            { strain = 'white_widow', chance = 10, prop = `prop_weed_02` },
-        },
-
-        -- Spawn-Positionen — so viele wie gewünscht hinzufügen!
-        -- Kein Blip, kein Marker, Spieler müssen sie selbst finden.
-        Positions = {
-            -- Paleto Forest / North Blaine County
-            vector3(-1043.26, -584.01, 53.84),
-            vector3(-1089.46, -607.92, 45.55),
-            vector3(-1066.83, -560.17, 52.19),
-            vector3(-1124.55, -534.76, 56.78),
-            vector3(-1009.14, -619.43, 51.62),
-            vector3(-857.42,  -533.61, 28.45),
-            vector3(-862.17,  -518.93, 29.12),
-            vector3(-839.54,  -546.72, 27.88),
-            vector3(-785.31,  -571.44, 26.33),
-            vector3(-810.29,  -498.76, 30.91),
-            -- Great Ocean Highway area
-            vector3(-358.14, 6235.91, 30.42),
-            vector3(-389.77, 6254.18, 29.87),
-            vector3(-327.41, 6271.53, 31.14),
-            vector3(-412.63, 6212.84, 28.76),
-            vector3(-295.88, 6289.47, 32.33),
-            -- Sandy Shores / Grapeseed
-            vector3(2685.14, 3265.43, 55.24),
-            vector3(2703.88, 3291.17, 54.98),
-            vector3(2721.56, 3241.82, 56.41),
-            vector3(2668.43, 3278.94, 54.67),
-            vector3(2740.29, 3262.15, 57.83),
-            -- Raton Canyon
-            vector3(-481.62, 3779.14, 237.42),
-            vector3(-503.44, 3801.76, 239.18),
-            vector3(-459.17, 3752.39, 235.67),
-            vector3(-527.83, 3762.54, 240.91),
-            vector3(-441.29, 3819.61, 236.44),
-            -- Mount Chilliad area
-            vector3(495.17,  5603.84, 791.24),
-            vector3(473.42,  5578.61, 788.77),
-            vector3(518.83,  5621.37, 793.15),
-            vector3(451.67,  5611.93, 786.44),
-            vector3(539.14,  5589.24, 795.62),
-        },
     },
 }

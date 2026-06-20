@@ -1,25 +1,20 @@
-local table        = table
-local activePlants = {}
-local inAction     = false  -- prevents overlapping progress bars
+local activePlants   = {}
+local inAction       = false
+local adminBlips     = {}
+local adminActive    = false
 
--- Shared flag: cl_wildweed.lua reads this so both files
+-- Shared flag: cl_wildweed.lua reads this so both scripts
 -- never fight over the same lib.showTextUI slot.
 _uteknark_near_plant = false
 
--- ── Animation dicts ───────────────────────────────────────────────────────
+-- ── Animation dict ────────────────────────────────────────────────────────
 
-local ANIM_GARDEN = { dict = 'amb@world_human_gardener_plant@male@idle_a', clip = 'idle_a',   flag = 1 }
-local ANIM_PICKUP = { dict = 'pickup_object',                              clip = 'pickup_low', flag = 1 }
+local ANIM_GARDEN = { dict = 'amb@world_human_gardener_plant@male@idle_a', clip = 'idle_a', flag = 1 }
 
--- ── ox_lib notification wrapper ───────────────────────────────────────────
+-- ── Locale notification helper ────────────────────────────────────────────
 
 local function notify(msg, ntype)
-    lib.notify({
-        title       = 'UteKnark',
-        description = msg,
-        type        = ntype or 'inform',
-        duration    = 4000,
-    })
+    lib.notify({ title = 'UteKnark', description = msg, type = ntype or 'inform', duration = 4000 })
 end
 
 -- ── Burn / particle effect ────────────────────────────────────────────────
@@ -39,64 +34,53 @@ AddEventHandler('esx_uteknark:pyromaniac', function(location)
         UseParticleFxAsset(Config.Burn.Collection)
         local handle = StartParticleFxLoopedAtCoord(
             Config.Burn.Effect, location + Config.Burn.Offset,
-            Config.Burn.Rotation, Config.Burn.Scale, false, false, false
-        )
+            Config.Burn.Rotation, Config.Burn.Scale, false, false, false)
         while GetGameTimer() < begin + Config.Burn.Duration do Citizen.Wait(0) end
         StopParticleFxLooped(handle, 0)
         RemoveNamedPtfxAsset(Config.Burn.Collection)
     end)
 end)
 
--- Legacy toast → ox_lib notify bridge
+-- Legacy toast bridge
 RegisterNetEvent('esx_uteknark:make_toast')
 AddEventHandler('esx_uteknark:make_toast', function(_, message)
     notify(message)
 end)
 
--- ── Plant prop spawner ────────────────────────────────────────────────────
+-- ── Plant prop management ─────────────────────────────────────────────────
 
 local function spawnPlantProp(entry)
-    local stage  = entry.data.stage  or 1
+    if entry.data.object or entry.data.deleted then return end
+    local stage  = GetStageFromGrowth(entry.data.growth)
     local strain = entry.data.strain or 'og_kush'
     local model  = GetPlantModel(strain, stage)
-
-    if not model or not IsModelValid(model) then
-        model = `prop_mp_cone_01`
-    end
+    if not IsModelValid(model) then model = `prop_mp_cone_01` end
     if not HasModelLoaded(model) then
         RequestModel(model)
         local t = GetGameTimer()
-        while not HasModelLoaded(model) and GetGameTimer() < t + 2500 do
-            Citizen.Wait(0)
-        end
+        while not HasModelLoaded(model) and GetGameTimer() < t + 2500 do Citizen.Wait(0) end
     end
-    if not HasModelLoaded(model) then
-        Citizen.Trace('UteKnark: Failed to load model for plant ' .. tostring(entry.data.id) .. '\n')
-        return
-    end
-
-    local offset = (Growth[stage] and Growth[stage].offset) or vector3(0, 0, 0)
-    local weed   = CreateObject(model, entry.bounds.location + offset, false, false, false)
+    if not HasModelLoaded(model) then return end
+    local stData = Growth[stage]
+    local offset = (stData and stData.offset) or vector3(0, 0, 0)
+    local loc    = entry.bounds.location
+    local weed   = CreateObject(model, loc + offset, false, false, false)
     SetEntityHeading(weed, math.random(0, 359) * 1.0)
     FreezeEntityPosition(weed, true)
     SetEntityCollision(weed, false, true)
-    if Config.SetLOD then
-        SetEntityLodDist(weed, math.floor(Config.Distance.Draw))
-    end
+    if Config.SetLOD then SetEntityLodDist(weed, math.floor(Config.Distance.Draw)) end
     table.insert(activePlants, {
         node   = entry,
         object = weed,
-        at     = entry.bounds.location,
-        stage  = stage,
-        strain = strain,
+        at     = loc,
         id     = entry.data.id,
+        strain = strain,
     })
     entry.data.object = weed
     SetModelAsNoLongerNeeded(model)
 end
 
--- ── Scan octree and spawn nearby props (background loop) ──────────────────
-
+-- Scan octree and spawn nearby props (background loop)
 Citizen.CreateThread(function()
     local drawDist = Config.Distance.Draw * 1.01
     while true do
@@ -110,144 +94,141 @@ Citizen.CreateThread(function()
     end
 end)
 
--- ── DrawIndicator (ring at plant base) ───────────────────────────────────
+-- ── Plant status UI ───────────────────────────────────────────────────────
 
-local function DrawIndicator(location, color)
-    DrawMarker(6, location, 0.0, 0.0, 0.0, -90.0, 0.0, 0.0,
-        1.0, 1.0, 1.0,
-        color[1], color[2], color[3], color[4],
-        false, false, 2, false, 0, 0, false)
+local function barLine(pct)
+    return MakeBar(pct, 10) .. '  ' .. math.floor(pct) .. '%'
 end
-
-local function getStrainName(strain)
-    return (Config.Strains[strain] and Config.Strains[strain].name) or strain
-end
-
--- ── ox_lib context menu for a planted plant ───────────────────────────────
 
 local function showPlantMenu(plant)
-    local stageData  = Growth[plant.stage]
-    local strainName = getStrainName(plant.strain)
-    local options    = {}
+    local data       = plant.node.data
+    local strainData = Config.Strains[data.strain] or {}
+    local name       = strainData.name or data.strain
+    local ready      = (data.growth or 0) >= 100
+    local myLoc      = GetEntityCoords(PlayerPedId())
+    local nearLoc    = vector3(myLoc.x, myLoc.y, myLoc.z)
 
-    -- Primary stage action (tend or harvest)
-    if stageData and stageData.interact then
-        if stageData.yield then
-            table.insert(options, {
-                title       = _U('menu_harvest'),
-                description = _U('menu_harvest_desc'),
-                icon        = 'seedling',
-                onSelect    = function()
-                    if inAction then return end
-                    inAction = true
-                    Citizen.CreateThread(function()
-                        local ok = lib.progressBar({
-                            duration  = Config.ActionTime,
-                            label     = _U('harvest_progress'),
-                            canCancel = true,
-                            disable   = { move = true, car = true, combat = true },
-                            anim      = ANIM_GARDEN,
-                        })
-                        inAction = false
-                        if ok then
-                            TriggerServerEvent('esx_uteknark:frob', plant.id, GetEntityCoords(PlayerPedId()))
-                        end
-                    end)
-                end,
-            })
-        else
-            table.insert(options, {
-                title       = _U('menu_tend'),
-                description = _U('menu_tend_desc'),
-                icon        = 'hand',
-                onSelect    = function()
-                    if inAction then return end
-                    inAction = true
-                    Citizen.CreateThread(function()
-                        local ok = lib.progressBar({
-                            duration  = Config.ActionTime,
-                            label     = _U('tend_progress'),
-                            canCancel = true,
-                            disable   = { move = true, car = true, combat = true },
-                            anim      = ANIM_GARDEN,
-                        })
-                        inAction = false
-                        if ok then
-                            TriggerServerEvent('esx_uteknark:frob', plant.id, GetEntityCoords(PlayerPedId()))
-                        end
-                    end)
-                end,
-            })
-        end
+    local options = {
+        {   -- Water
+            title     = '💧 ' .. _U('ui_water'),
+            description = barLine(data.water or 0),
+            icon      = 'droplet',
+            iconColor = '#4fc3f7',
+            disabled  = true,
+        },
+        {   -- Fertilizer
+            title     = '🌿 ' .. _U('ui_fert'),
+            description = barLine(data.fertilizer or 0),
+            icon      = 'leaf',
+            iconColor = '#81c784',
+            disabled  = true,
+        },
+        {   -- Health
+            title     = '❤️ ' .. _U('ui_health'),
+            description = barLine(data.health or 100),
+            icon      = 'heart',
+            iconColor = '#ef5350',
+            disabled  = true,
+        },
+        {   -- Growth
+            title     = '🌱 ' .. _U('ui_growth'),
+            description = barLine(data.growth or 0),
+            icon      = 'seedling',
+            iconColor = '#66bb6a',
+            disabled  = true,
+        },
+        {   -- Status
+            title     = ready
+                and ('✅ ' .. _U('ui_ready_yes'))
+                or  ('⏳ ' .. _U('ui_growing') .. ' ' .. math.floor(data.growth or 0) .. '%'),
+            icon      = ready and 'check-circle' or 'clock',
+            iconColor = ready and '#4caf50'       or '#ff9800',
+            disabled  = true,
+        },
+        {   -- Divider
+            title    = '─────────────────────',
+            disabled = true,
+        },
+        {   -- Water button
+            title    = _U('water_text'),
+            icon     = 'droplet',
+            disabled = (data.water or 0) >= 99,
+            onSelect = function()
+                if inAction then return end
+                inAction = true
+                Citizen.CreateThread(function()
+                    local ok = lib.progressBar({
+                        duration = 5000, label = _U('water_progress'),
+                        canCancel = true,
+                        disable   = { move = true, car = true, combat = true },
+                        anim      = ANIM_GARDEN,
+                    })
+                    inAction = false
+                    if ok then TriggerServerEvent('esx_uteknark:water', plant.id, nearLoc) end
+                end)
+            end,
+        },
+        {   -- Fertilize button
+            title    = _U('fertilize_text'),
+            icon     = 'leaf',
+            disabled = (data.fertilizer or 0) >= 99,
+            onSelect = function()
+                if inAction then return end
+                inAction = true
+                Citizen.CreateThread(function()
+                    local ok = lib.progressBar({
+                        duration = 5000, label = _U('fertilize_progress'),
+                        canCancel = true,
+                        disable   = { move = true, car = true, combat = true },
+                        anim      = ANIM_GARDEN,
+                    })
+                    inAction = false
+                    if ok then TriggerServerEvent('esx_uteknark:fertilize', plant.id, nearLoc) end
+                end)
+            end,
+        },
+    }
+
+    -- Harvest (only when growth = 100%)
+    if ready then
+        table.insert(options, {
+            title     = _U('interact_harvest'),
+            icon      = 'scissors',
+            iconColor = '#ffee58',
+            onSelect  = function()
+                if inAction then return end
+                inAction = true
+                Citizen.CreateThread(function()
+                    local ok = lib.progressBar({
+                        duration = 6000, label = _U('harvest_progress'),
+                        canCancel = true,
+                        disable   = { move = true, car = true, combat = true },
+                        anim      = ANIM_GARDEN,
+                    })
+                    inAction = false
+                    if ok then TriggerServerEvent('esx_uteknark:harvest', plant.id, nearLoc) end
+                end)
+            end,
+        })
     end
-
-    -- Water
-    table.insert(options, {
-        title       = _U('menu_water'),
-        description = _U('menu_water_desc'),
-        icon        = 'droplet',
-        onSelect    = function()
-            if inAction then return end
-            inAction = true
-            Citizen.CreateThread(function()
-                local ok = lib.progressBar({
-                    duration  = 5000,
-                    label     = _U('water_progress'),
-                    canCancel = true,
-                    disable   = { move = true, car = true, combat = true },
-                    anim      = ANIM_GARDEN,
-                })
-                inAction = false
-                if ok then
-                    TriggerServerEvent('esx_uteknark:water', plant.id, GetEntityCoords(PlayerPedId()))
-                end
-            end)
-        end,
-    })
-
-    -- Fertilize
-    table.insert(options, {
-        title       = _U('menu_fertilize'),
-        description = _U('menu_fertilize_desc'),
-        icon        = 'flask',
-        onSelect    = function()
-            if inAction then return end
-            inAction = true
-            Citizen.CreateThread(function()
-                local ok = lib.progressBar({
-                    duration  = 5000,
-                    label     = _U('fertilize_progress'),
-                    canCancel = true,
-                    disable   = { move = true, car = true, combat = true },
-                    anim      = ANIM_GARDEN,
-                })
-                inAction = false
-                if ok then
-                    TriggerServerEvent('esx_uteknark:fertilize', plant.id, GetEntityCoords(PlayerPedId()))
-                end
-            end)
-        end,
-    })
 
     -- Destroy
     table.insert(options, {
-        title       = _U('menu_destroy'),
-        description = _U('menu_destroy_desc'),
-        icon        = 'trash',
-        onSelect    = function()
+        title     = _U('interact_destroy'),
+        icon      = 'fire',
+        iconColor = '#f44336',
+        onSelect  = function()
             if inAction then return end
             inAction = true
             Citizen.CreateThread(function()
                 local ok = lib.progressBar({
-                    duration  = Config.ActionTime,
-                    label     = _U('destroy_progress'),
+                    duration = 4000, label = _U('destroy_progress'),
                     canCancel = true,
                     disable   = { move = true, car = true, combat = true },
                     anim      = ANIM_GARDEN,
                 })
                 inAction = false
                 if ok then
-                    local myLoc = GetEntityCoords(PlayerPedId())
                     for i, p in ipairs(activePlants) do
                         if p.id == plant.id then
                             if DoesEntityExist(p.object) then DeleteObject(p.object) end
@@ -255,59 +236,63 @@ local function showPlantMenu(plant)
                             break
                         end
                     end
-                    TriggerServerEvent('esx_uteknark:remove', plant.id, myLoc)
+                    TriggerServerEvent('esx_uteknark:remove', plant.id, nearLoc)
                 end
             end)
         end,
     })
 
-    lib.registerContext({
-        id      = 'uteknark_plant_menu',
-        title   = strainName .. ' – Stage ' .. tostring(plant.stage) .. '/' .. tostring(#Growth),
-        options = options,
-    })
+    lib.registerContext({ id = 'uteknark_plant_menu', title = '🌿 ' .. name, options = options })
     lib.showContext('uteknark_plant_menu')
 end
 
--- ── Main plant interaction loop ───────────────────────────────────────────
+-- ── Main plant interaction loop ────────────────────────────────────────────
+
+local function DrawIndicator(location, color)
+    DrawMarker(6, location, 0.0, 0.0, 0.0, -90.0, 0.0, 0.0,
+        1.0, 1.0, 1.0, color[1], color[2], color[3], color[4],
+        false, false, 2, false, 0, 0, false)
+end
 
 Citizen.CreateThread(function()
     local drawDist = Config.Distance.Draw * 1.01
     while true do
         local playerPed = PlayerPedId()
-
         if #activePlants > 0 then
             local myLoc           = GetEntityCoords(playerPed)
-            local closestDistance
+            local closestDist
             local closestPlant
-
             for i = #activePlants, 1, -1 do
                 local plant = activePlants[i]
                 local dist  = #(plant.at - myLoc)
-                if not DoesEntityExist(plant.object) then
+                if not DoesEntityExist(plant.object) or plant.node.data.deleted then
                     table.remove(activePlants, i)
                 elseif dist > drawDist then
                     DeleteObject(plant.object)
                     plant.node.data.object = nil
                     table.remove(activePlants, i)
-                elseif not closestDistance or dist < closestDistance then
-                    closestDistance = dist
-                    closestPlant    = plant
+                else
+                    if not closestDist or dist < closestDist then
+                        closestDist  = dist
+                        closestPlant = plant
+                    end
                 end
             end
-
-            if closestPlant and closestDistance and not IsPedInAnyVehicle(playerPed) then
-                if closestDistance <= Config.Distance.Interact then
-                    local stageData = Growth[closestPlant.stage]
-                    if stageData then
-                        DrawIndicator(closestPlant.at + stageData.marker.offset, stageData.marker.color)
+            if closestPlant and not IsPedInAnyVehicle(playerPed) then
+                if closestDist <= Config.Distance.Interact then
+                    -- Marker
+                    local stage  = GetStageFromGrowth(closestPlant.node.data.growth)
+                    local stData = Growth[stage]
+                    if stData then
+                        DrawIndicator(closestPlant.at + stData.marker.offset, stData.marker.color)
                     end
+                    -- TextUI
                     if not inAction then
                         if not _uteknark_near_plant then
                             _uteknark_near_plant = true
+                            lib.showTextUI(_U('press_e_options'), { position = 'left-center', icon = 'cannabis' })
                         end
-                        lib.showTextUI(_U('press_e_options'), { position = 'left-center', icon = 'cannabis' })
-                        if IsControlJustPressed(0, 38) then -- E key
+                        if IsControlJustPressed(0, 38) then
                             lib.hideTextUI()
                             showPlantMenu(closestPlant)
                         end
@@ -342,18 +327,14 @@ local plantingOffset = vector3(0, 2, -3)
 local function getGroundLocation()
     local ped = PlayerPedId()
     if IsPedInAnyVehicle(ped) then return false, 'planting_in_vehicle' end
-
     local from   = GetEntityCoords(ped)
     local target = GetOffsetFromEntityInWorldCoords(ped, plantingOffset)
     local ray    = StartShapeTestRay(from, target, 17, ped, 7)
     local _, hit, hitLoc = GetShapeTestResult(ray)
-
     if hit ~= 1 then return false, 'planting_no_ground' end
     if #(from - hitLoc) > Config.Distance.Interact then return false, 'planting_too_far', hitLoc end
-
     local hits = cropstate.octree:searchSphere(hitLoc, Config.Distance.Space)
     if #hits > 0 then return false, 'planting_too_close', hitLoc end
-
     return true, 'planting_ok', hitLoc
 end
 
@@ -369,17 +350,69 @@ AddEventHandler('esx_uteknark:attempt_plant', function(strainKey)
     inAction = true
     Citizen.CreateThread(function()
         local success = lib.progressBar({
-            duration  = Config.ActionTime,
+            duration  = 4000,
             label     = _U('planting_progress', strainName),
             canCancel = true,
             disable   = { move = true, car = true, combat = true },
             anim      = ANIM_GARDEN,
         })
         inAction = false
-        if success then
-            TriggerServerEvent('esx_uteknark:success_plant', location, strainKey)
-        end
+        if success then TriggerServerEvent('esx_uteknark:success_plant', location, strainKey) end
     end)
+end)
+
+-- ── Admin blip system ─────────────────────────────────────────────────────
+
+RegisterCommand('weedplants', function()
+    if adminActive then
+        for _, b in ipairs(adminBlips) do RemoveBlip(b) end
+        adminBlips  = {}
+        adminActive = false
+        lib.notify({ title = 'UteKnark', description = _U('admin_blips_off'), type = 'inform' })
+    else
+        TriggerServerEvent('esx_uteknark:admin_request')
+    end
+end, false)
+
+RegisterNetEvent('esx_uteknark:admin_denied')
+AddEventHandler('esx_uteknark:admin_denied', function()
+    lib.notify({ title = 'UteKnark', description = _U('admin_no_perm'), type = 'error' })
+end)
+
+RegisterNetEvent('esx_uteknark:admin_data')
+AddEventHandler('esx_uteknark:admin_data', function(plants, wild)
+    adminActive = true
+    for _, p in ipairs(plants) do
+        local blip = AddBlipForCoord(p.location.x, p.location.y, p.location.z)
+        SetBlipSprite(blip, Config.AdminBlips.PlantSprite)
+        SetBlipColour(blip, Config.AdminBlips.PlantColor)
+        SetBlipScale(blip, Config.AdminBlips.PlantScale)
+        SetBlipAsShortRange(blip, false)
+        local sName = (Config.Strains[p.strain] and Config.Strains[p.strain].name) or p.strain
+        BeginTextCommandSetBlipName('STRING')
+        AddTextComponentSubstringPlayerName(
+            sName .. ' | ' .. _U('ui_growth') .. ': ' .. math.floor(p.growth) .. '%' ..
+            ' | HP: ' .. math.floor(p.health) .. '%')
+        EndTextCommandSetBlipName(blip)
+        table.insert(adminBlips, blip)
+    end
+    for _, w in ipairs(wild) do
+        local blip = AddBlipForCoord(w.pos.x, w.pos.y, w.pos.z)
+        SetBlipSprite(blip, Config.AdminBlips.WildSprite)
+        SetBlipColour(blip, Config.AdminBlips.WildColor)
+        SetBlipScale(blip, Config.AdminBlips.WildScale)
+        SetBlipAsShortRange(blip, false)
+        local sName = (Config.Strains[w.strain] and Config.Strains[w.strain].name) or w.strain
+        BeginTextCommandSetBlipName('STRING')
+        AddTextComponentSubstringPlayerName('Wild: ' .. sName)
+        EndTextCommandSetBlipName(blip)
+        table.insert(adminBlips, blip)
+    end
+    lib.notify({
+        title       = 'UteKnark Admin',
+        description = _U('admin_blips_on', #plants, #wild),
+        type        = 'success',
+    })
 end)
 
 -- ── Cleanup ────────────────────────────────────────────────────────────────
@@ -392,6 +425,8 @@ AddEventHandler('onResourceStop', function(name)
     activePlants         = {}
     _uteknark_near_plant = false
     lib.hideTextUI()
+    for _, b in ipairs(adminBlips) do RemoveBlip(b) end
+    adminBlips = {}
 end)
 
 -- ── Debug toggle ──────────────────────────────────────────────────────────

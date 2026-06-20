@@ -1,5 +1,5 @@
 resource_manifest_version '44febabe-d386-4d18-afbe-5e627f4af937'
-description 'ESX UteKnark Extended by DemmyDemon & community'
+description 'ESX UteKnark – Dynamic Weed Growing System v3'
 
 dependencies { 'es_extended', 'mysql-async', 'ox_lib' }
 
@@ -17,6 +17,7 @@ client_scripts {
     'lib/debug.lua',
     'cl_uteknark.lua',
     'cl_wildweed.lua',
+    'cl_drying.lua',
 }
 
 server_scripts {

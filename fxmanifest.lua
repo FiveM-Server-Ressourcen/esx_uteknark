@@ -1,8 +1,8 @@
 fx_version 'cerulean'
 game      'gta5'
 
-description 'ESX UteKnark – Extended Weed System'
-version     '2.0.0'
+description 'ESX UteKnark – Dynamic Weed Growing System'
+version     '3.0.0'
 author      'DemmyDemon (extended)'
 
 shared_scripts {
@@ -19,6 +19,7 @@ client_scripts {
     'lib/debug.lua',
     'cl_uteknark.lua',
     'cl_wildweed.lua',
+    'cl_drying.lua',
 }
 
 server_scripts {

@@ -1,61 +1,76 @@
--- =========================================================
--- GROWTH HELPERS
--- Hilfsfunktionen für das Sortenbasierte Wachstumssystem.
--- Alle Wachstumsdaten kommen aus Config.Strains.
--- =========================================================
+--[[ GROWTH STAGES
+     Stages are now derived from a continuous growth percentage (0-100).
+     Models and visual metadata live here; timing is driven by the decay system.
+--]]
 
-function GetStrainData(strainKey)
-    return Config.Strains[strainKey]
+-- ── Stage derivation ──────────────────────────────────────────────────────
+
+function GetStageFromGrowth(pct)
+    if     pct >= 100 then return 6
+    elseif pct >= 80  then return 5
+    elseif pct >= 60  then return 4
+    elseif pct >= 40  then return 3
+    elseif pct >= 20  then return 2
+    else                   return 1 end
 end
 
-function GetStageData(strainKey, stage)
-    local strain = Config.Strains[strainKey]
-    if not strain then return nil end
-    return strain.stages[stage]
+-- ── UI helpers ────────────────────────────────────────────────────────────
+
+-- Returns a Unicode block progress bar string
+function MakeBar(pct, width)
+    width   = width or 10
+    pct     = math.max(0, math.min(100, pct))
+    local n = math.floor(pct / 100 * width + 0.5)
+    return string.rep('█', n) .. string.rep('░', width - n)
 end
 
-function GetStageCount(strainKey)
-    local strain = Config.Strains[strainKey]
-    if not strain then return 0 end
-    return #strain.stages
+-- ── Model resolution ──────────────────────────────────────────────────────
+
+function GetPlantModel(strain, stage)
+    local s = Config.Strains[strain]
+    if not s then return `prop_mp_cone_01` end
+    local key = (stage <= 4) and 'prop_young' or 'prop_mature'
+    return s[key] or `prop_mp_cone_01`
 end
 
-function IsHarvestStage(strainKey, stage)
-    local stageData = GetStageData(strainKey, stage)
-    return stageData ~= nil and stageData.harvest == true
-end
+-- ── Visual stage table ────────────────────────────────────────────────────
 
--- Berechnet Qualität (1–5 Sterne) basierend auf Pflege
-function GetQualityStars(waterCount, fertCount)
-    waterCount = waterCount or 0
-    fertCount  = fertCount  or 0
+local Colors = {
+    Seedling = {  80, 200, 120, 170 },
+    Growing  = {  40, 180, 255, 170 },
+    Mature   = { 120, 220,  60, 170 },
+    Ready    = { 255, 180,  30, 180 },
+}
 
-    local waterStars = 1
-    for stars = 5, 2, -1 do
-        if waterCount >= Config.Quality.Water[stars] then
-            waterStars = stars
-            break
-        end
-    end
-
-    local fertStars = 1
-    for stars = 5, 2, -1 do
-        if fertCount >= Config.Quality.Fertilizer[stars] then
-            fertStars = stars
-            break
-        end
-    end
-
-    return math.min(5, math.max(1, math.floor((waterStars + fertStars) / 2)))
-end
-
-function GetQualityLabel(stars)
-    local labels = {
-        [1] = '★☆☆☆☆  Schlecht',
-        [2] = '★★☆☆☆  Mäßig',
-        [3] = '★★★☆☆  Normal',
-        [4] = '★★★★☆  Gut',
-        [5] = '★★★★★  Perfekt',
-    }
-    return labels[stars] or '★☆☆☆☆  Schlecht'
-end
+Growth = {
+    [1] = { -- 0-20 % – Seedling
+        model_key = 'prop_young',
+        offset    = vector3(0, 0, -1.0),
+        marker    = { offset = vector3(0, 0, 0.05), color = Colors.Seedling },
+    },
+    [2] = { -- 20-40 % – Young
+        model_key = 'prop_young',
+        offset    = vector3(0, 0, -0.8),
+        marker    = { offset = vector3(0, 0, 0.30), color = Colors.Growing },
+    },
+    [3] = { -- 40-60 % – Growing
+        model_key = 'prop_young',
+        offset    = vector3(0, 0, -0.6),
+        marker    = { offset = vector3(0, 0, 0.55), color = Colors.Growing },
+    },
+    [4] = { -- 60-80 % – Maturing
+        model_key = 'prop_mature',
+        offset    = vector3(0, 0, -0.4),
+        marker    = { offset = vector3(0, 0, 0.80), color = Colors.Mature },
+    },
+    [5] = { -- 80-100 % – Almost ready
+        model_key = 'prop_mature',
+        offset    = vector3(0, 0, -0.2),
+        marker    = { offset = vector3(0, 0, 1.05), color = Colors.Mature },
+    },
+    [6] = { -- 100 % – Harvestable
+        model_key = 'prop_mature',
+        offset    = vector3(0, 0,  0.0),
+        marker    = { offset = vector3(0, 0, 1.80), color = Colors.Ready },
+    },
+}

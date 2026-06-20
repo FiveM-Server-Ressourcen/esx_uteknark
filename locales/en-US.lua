@@ -1,44 +1,81 @@
 Locales['en-US'] = {
-    -- Pflanzen
-    planting_text              = 'Pflanzen',
-    planting_ok                = 'Erfolgreich gepflanzt!',
-    planting_in_vehicle        = 'Im Fahrzeug kann nicht gepflanzt werden.',
-    planting_too_steep         = 'Der Boden ist zu steil!',
-    planting_too_far           = 'Etwas näher bitte...',
-    planting_not_suitable_soil = 'Hier wächst nichts...',
-    planting_too_close         = 'Die Pflanzen brauchen mehr Abstand!',
-    planting_obstructed        = 'Zu wenig Platz nach oben.',
-    planting_no_seed           = 'Du hast keine Samen.',
-    planting_no_flowerpot      = 'Du benötigst einen Blumentopf.',
-    planting_failed            = 'Fehler beim Pflanzen.',
-    planting_too_fast          = 'Bitte warte einen Moment.',
 
-    -- Wasser & Dünger
-    water_start                = 'Du gießt die Pflanze...',
-    water_done                 = 'Pflanze wurde gegossen.',
-    water_no_item              = 'Du hast kein Wasser dabei!',
-    fertilize_start            = 'Du düngst die Pflanze...',
-    fertilize_done             = 'Pflanze wurde gedüngt.',
-    fertilize_no_item          = 'Du hast keinen Dünger dabei!',
+    -- ── Planting ─────────────────────────────────────────────────────────
+    planting_text       = 'Planting',
+    planting_progress   = 'Planting %s...',
+    planting_ok         = 'Successfully planted %s!',
+    planting_in_vehicle = 'Cannot plant from a vehicle.',
+    planting_too_steep  = 'The ground is too steep!',
+    planting_too_far    = 'A little closer please...',
+    planting_too_close  = 'Plants need more space!',
+    planting_no_ground  = 'No suitable ground found.',
+    planting_obstructed = 'Not enough clearance above.',
+    planting_no_seed    = 'You have no seeds.',
+    planting_no_pot     = 'You need a flower pot to plant.',
+    planting_too_fast   = 'Please wait a moment.',
 
-    -- Ernte
-    harvest_start              = 'Du erntest die Pflanze...',
-    harvest_done               = '%s geerntet! Ernte: %d× | Samen: %d× | Qualität: %s',
-    harvest_not_ready          = 'Die Pflanze ist noch nicht erntereif!',
-    harvest_inventory_full     = 'Dein Inventar ist voll!',
+    -- ── Plant UI labels ──────────────────────────────────────────────────
+    ui_water      = 'Water',
+    ui_fert       = 'Fertilizer',
+    ui_health     = 'Health',
+    ui_growth     = 'Growth',
+    ui_ready_yes  = 'Harvest Ready: Yes',
+    ui_growing    = 'Growing:',
 
-    -- Wild Weed
-    wild_collect_start         = 'Du sammelst Samen...',
-    wild_collect_done          = '%s Samen eingesammelt!',
-    wild_collect_fail          = 'Du hast die Pflanze beschädigt!',
-    wild_collect_cancel        = 'Einsammeln abgebrochen.',
+    -- ── Interaction TextUI ────────────────────────────────────────────────
+    press_e_options = '[E] Plant options',
+    press_e_plant   = '[E] Plant options',
 
-    -- Vernichten
-    destroy_start              = 'Du vernichtest die Pflanze...',
-    destroy_done               = 'Pflanze vernichtet.',
+    -- ── Water ─────────────────────────────────────────────────────────────
+    water_text      = 'Watering',
+    water_progress  = 'Watering the plant...',
+    water_done      = 'Plant watered.',
+    water_no_item   = 'You have no water item!',
 
-    -- Allgemein
-    command_invalid            = 'Unbekannter Befehl: %s',
-    command_empty              = 'UteKnark Version %s',
-    interact_text              = 'Pflanzen-Interaktion',
+    -- ── Fertilizer ────────────────────────────────────────────────────────
+    fertilize_text      = 'Fertilizing',
+    fertilize_progress  = 'Fertilizing the plant...',
+    fertilize_done      = 'Plant fertilized.',
+    fertilize_no_item   = 'You have no fertilizer!',
+
+    -- ── Harvest ───────────────────────────────────────────────────────────
+    interact_harvest    = 'Harvest',
+    harvest_progress    = 'Harvesting the plant...',
+    harvest_not_ready   = 'This plant is not ready to harvest yet!',
+    interact_harvested  = 'Harvested: %d× wet weed + %d× seeds.',
+    interact_full       = 'Inventory full! Need %d free slots.',
+
+    -- ── Destroy ───────────────────────────────────────────────────────────
+    interact_destroy    = 'Destroy',
+    interact_destroyed  = 'Plant destroyed.',
+    destroy_progress    = 'Destroying the plant...',
+
+    -- ── Wild Weed ─────────────────────────────────────────────────────────
+    wild_text           = 'Wild Weed',
+    press_e_wild        = '[E] Collect %s seeds',
+    wild_progress       = 'Collecting %s seeds...',
+    wild_collected      = 'Collected %d× %s seeds.',
+    wild_failed         = 'You disturbed the plant — nothing collected.',
+    wild_full           = 'Inventory full!',
+
+    -- ── Drying System ─────────────────────────────────────────────────────
+    drying_text         = 'Drying Station',
+    press_e_dry         = '[E] Drying Station – %s',
+    drying_desc         = 'Item: %s',
+    drying_amount       = 'Amount',
+    drying_progress     = 'Drying %s...',
+    drying_done         = 'Dried %d× %s.',
+    drying_no_wet       = 'You have no wet weed!',
+    drying_full         = 'Inventory full — wet weed returned.',
+    drying_cancelled    = 'Drying cancelled.',
+
+    -- ── Admin ─────────────────────────────────────────────────────────────
+    admin_blips_on      = 'Showing %d plant(s) and %d wild weed position(s). /weedplants to hide.',
+    admin_blips_off     = 'Plant blips removed.',
+    admin_no_perm       = 'No permission.',
+
+    -- ── Commands ──────────────────────────────────────────────────────────
+    command_invalid     = 'Unknown command: %s',
+    command_empty       = 'UteKnark Version %s',
+    interact_text       = 'Plant Interaction',
 }

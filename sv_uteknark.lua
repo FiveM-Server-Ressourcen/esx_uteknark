@@ -1,426 +1,517 @@
-local ESX = nil
-local oneSyncEnabled = GetConvar('onesync_enabled', false)
-local VERBOSE = false
-local lastPlant = {}
-local tickTimes = {}
+-- =========================================================
+-- SERVER — ESX UteKnark Extended
+-- =========================================================
+
+local ESX         = nil
+local VERBOSE     = false
+local lastPlant   = {}  -- Anti-Spam: source -> timestamp
+local tickTimes   = {}
 local tickPlantCount = 0
-local VERSION = '1.1.4'
+local VERSION     = '2.0.0'
 
-AddEventHandler('playerDropped',function(why)
-    lastPlant[source] = nil
-end)
+-- =========================================================
+-- Logging
+-- =========================================================
 
-function log (...)
-    local numElements = select('#',...)
-    local elements = {...}
+function log(...)
+    local elements = { ... }
     local line = ''
-    local prefix = '['..os.date("%H:%M:%S")..'] '
-    suffix = '\n'
-    local resourceName = '<'..GetCurrentResourceName()..'>'
-
-    for i=1,numElements do
-        local entry = elements[i]
-        line = line..' '..tostring(entry)
+    for _, v in ipairs(elements) do
+        line = line .. ' ' .. tostring(v)
     end
-    Citizen.Trace(prefix..resourceName..line..suffix)
+    Citizen.Trace('[' .. os.date('%H:%M:%S') .. '] <' .. GetCurrentResourceName() .. '>' .. line .. '\n')
 end
 
 function verbose(...)
-    if VERBOSE then
-        log(...)
-    end
+    if VERBOSE then log(...) end
 end
 
-if not oneSyncEnabled then
-    log('OneSync not available: Will have to trust client for locations!')
-end
+-- =========================================================
+-- Spieler-Inventar-Helfer
+-- =========================================================
 
 function HasItem(who, what, count)
     count = count or 1
-    if ESX == nil then
-        log("HasItem: No ESX Object!")
-        return false
-    end
+    if not ESX then return false end
     local xPlayer = ESX.GetPlayerFromId(who)
-    if xPlayer == nil then
-        log("HasItem: Failed to resolve xPlayer from", who)
-        return false
-    end
-    local itemspec =  xPlayer.getInventoryItem(what)
-    if itemspec then
-        if itemspec.count >= count then
-            return true
-        else
-            return false
+    if not xPlayer then return false end
+    local item = xPlayer.getInventoryItem(what)
+    return item ~= nil and item.count >= count
+end
+
+-- Prüfe ob Spieler eines der WaterItems besitzt; gibt Item-Name zurück oder nil
+function HasWaterItem(who)
+    if not ESX then return nil end
+    local xPlayer = ESX.GetPlayerFromId(who)
+    if not xPlayer then return nil end
+    for _, itemName in ipairs(Config.WaterItems) do
+        local item = xPlayer.getInventoryItem(itemName)
+        if item and item.count >= 1 then
+            return itemName
         end
-    else
-        log("HasItem: Failed to get item data for item", what)
-        return false
     end
+    return nil
 end
 
 function TakeItem(who, what, count)
     count = count or 1
-    if ESX == nil then
-        log("TakeItem: No ESX Object!")
-        return false
-    end
+    if not ESX then return false end
     local xPlayer = ESX.GetPlayerFromId(who)
-    if xPlayer == nil then
-        log("TakeItem: Failed to resolve xPlayer from", who)
-        return false
+    if not xPlayer then return false end
+    local item = xPlayer.getInventoryItem(what)
+    if item and item.count >= count then
+        xPlayer.removeInventoryItem(what, count)
+        return true
     end
-    local itemspec =  xPlayer.getInventoryItem(what)
-    if itemspec then
-        if itemspec.count >= count then
-            xPlayer.removeInventoryItem(what, count)
-            return true
-        else
-            return false
-        end
-    else
-        log("TakeItem: Failed to get item data for item", what)
-        return false
-    end
+    return false
 end
 
 function GiveItem(who, what, count)
     count = count or 1
-    if ESX == nil then
-        log("GiveItem: No ESX Object!")
-        return false
-    end
+    if not ESX then return false end
     local xPlayer = ESX.GetPlayerFromId(who)
-    if xPlayer == nil then
-        log("GiveItem: Failed to resolve xPlayer from", who)
-        return false
-    end
-    local itemspec =  xPlayer.getInventoryItem(what)
-    if itemspec then
-        if not itemspec.limit or itemspec.limit == -1 or itemspec.count + count <= itemspec.limit then
+    if not xPlayer then return false end
+    local item = xPlayer.getInventoryItem(what)
+    if item then
+        if not item.limit or item.limit == -1 or item.count + count <= item.limit then
             xPlayer.addInventoryItem(what, count)
             return true
-        else
-            return false
         end
     else
-        log("GiveItem: Failed to get item data for item", what)
-        return false
+        log('GiveItem: Item', what, 'existiert nicht in ESX!')
     end
+    return false
 end
 
-function makeToast(target, subject, message)
-    TriggerClientEvent('esx_uteknark:make_toast', target, subject, message)
-end
-function inChat(target, message)
-    if target == 0 then
-        log(message)
-    else
-        TriggerClientEvent('chat:addMessage',target,{args={'UteKnark', message}})
-    end
+-- ox_lib Notification an Spieler
+function notify(target, description, notifyType, title)
+    notifyType = notifyType or 'inform'
+    TriggerClientEvent('ox_lib:notify', target, {
+        title       = title or 'Weed',
+        description = description,
+        type        = notifyType,
+        duration    = 4000,
+    })
 end
 
-function plantSeed(location, soil)
-    
+-- =========================================================
+-- Pflanzqualität berechnen
+-- =========================================================
+
+function calcQuality(waterCount, fertCount)
+    waterCount = waterCount or 0
+    fertCount  = fertCount  or 0
+
+    local waterStars = 1
+    for stars = 5, 2, -1 do
+        if waterCount >= Config.Quality.Water[stars] then
+            waterStars = stars
+            break
+        end
+    end
+
+    local fertStars = 1
+    for stars = 5, 2, -1 do
+        if fertCount >= Config.Quality.Fertilizer[stars] then
+            fertStars = stars
+            break
+        end
+    end
+
+    return math.min(5, math.max(1, math.floor((waterStars + fertStars) / 2)))
+end
+
+function qualityLabel(stars)
+    local labels = {
+        [1] = '★☆☆☆☆  Schlecht',
+        [2] = '★★☆☆☆  Mäßig',
+        [3] = '★★★☆☆  Normal',
+        [4] = '★★★★☆  Gut',
+        [5] = '★★★★★  Perfekt',
+    }
+    return labels[stars] or '★☆☆☆☆'
+end
+
+-- =========================================================
+-- Pflanzfunktion
+-- =========================================================
+
+function plantSeed(location, strain)
     local hits = cropstate.octree:searchSphere(location, Config.Distance.Space)
-    if #hits > 0 then
-        return false
-    end
-
-    verbose('Planting at',location,'in soil', soil)
-    cropstate:plant(location, soil)
+    if #hits > 0 then return false end
+    cropstate:plant(location, strain)
     return true
 end
 
-function doScenario(who, what, where)
-    verbose('Telling', who,'to',what,'at',where)
-    TriggerClientEvent('esx_uteknark:do', who, what, where)
-end
+-- =========================================================
+-- Pflanzen (Server-Event vom Client)
+-- =========================================================
 
 RegisterNetEvent('esx_uteknark:success_plant')
-AddEventHandler ('esx_uteknark:success_plant', function(location, soil)
-    local src = source
-    if oneSyncEnabled and false then -- "and false" because something is weird in my OneSync stuff
-        local ped = GetPlayerPed(src)
-        --log('ped:',ped)
-        local pedLocation = GetEntityCoords(ped)
-        --log('pedLocation:',pedLocation)
-        --log('location:', location)
-        local distance = #(pedLocation - location)
-        if distance > Config.Distance.Interact then
-            if distance > 10 then
-                log(GetPlayerName(src),'attempted planting at',distance..'m - Cheating?')
-            end
-            makeToast(src, _U('planting_text'), _U('planting_too_far'))
-            return
-        end
+AddEventHandler('esx_uteknark:success_plant', function(location, strainKey)
+    local src        = source
+    local strainData = Config.Strains[strainKey]
+
+    if not strainData then
+        notify(src, 'Unbekannte Weed-Sorte.', 'error')
+        return
     end
-    if soil and Config.Soil[soil] then
-        local hits = cropstate.octree:searchSphere(location, Config.Distance.Space)
-        if #hits == 0 then
-            if TakeItem(src, Config.Items.Seed) then
-                if plantSeed(location, soil) then
-                    makeToast(src, _U('planting_text'), _U('planting_ok'))
-                    doScenario(src, 'Plant', location)
-                else
-                    GiveItem(src, Config.Items.Seed)
-                    makeToast(src, _U('planting_text'), _U('planting_failed'))
-                end
-            else
-                makeToast(src, _U('planting_text'), _U('planting_no_seed'))
-            end
-        else
-            makeToast(src, _U('planting_text'), _U('planting_too_close'))
-        end
+
+    -- Anti-Spam
+    local now  = os.time()
+    local last = lastPlant[src] or 0
+    if now < last + 5 then
+        notify(src, 'Bitte warte einen Moment.', 'error')
+        return
+    end
+    lastPlant[src] = now
+
+    -- Distanz-Sicherheitscheck
+    local ped  = GetPlayerPed(src)
+    local dist = #(GetEntityCoords(ped) - location)
+    if dist > Config.Distance.Interact + 3.0 then
+        log(GetPlayerName(src), 'pflanzte aus', string.format('%.1fm', dist), '— möglicherweise Cheat')
+        return
+    end
+
+    -- Samen prüfen
+    if not HasItem(src, strainData.seed) then
+        notify(src, 'Du hast keine ' .. strainData.name .. ' Samen.', 'error')
+        return
+    end
+
+    -- Blumentopf prüfen
+    if not HasItem(src, Config.FlowerPot) then
+        notify(src, 'Du benötigst einen Blumentopf zum Pflanzen.', 'error')
+        return
+    end
+
+    -- Nochmal Platz prüfen (Server-Seite)
+    local hits = cropstate.octree:searchSphere(location, Config.Distance.Space)
+    if #hits > 0 then
+        notify(src, 'Zu nah an einer anderen Pflanze!', 'error')
+        return
+    end
+
+    -- Items abziehen und pflanzen
+    TakeItem(src, strainData.seed, 1)
+    TakeItem(src, Config.FlowerPot, 1)
+
+    if plantSeed(location, strainKey) then
+        notify(src, strainData.name .. ' erfolgreich gepflanzt!', 'success')
+        log(GetPlayerName(src), 'pflanzte', strainData.name, 'an', tostring(location))
     else
-        makeToast(src, _U('planting_text'), _U('planting_not_suitable_soil'))
+        -- Rückgabe falls etwas schiefging
+        GiveItem(src, strainData.seed, 1)
+        GiveItem(src, Config.FlowerPot, 1)
+        notify(src, 'Fehler beim Pflanzen.', 'error')
     end
 end)
 
-RegisterNetEvent('esx_uteknark:log')
-AddEventHandler ('esx_uteknark:log',function(...)
-    local src = source
-    log(src,GetPlayerName(src),...)
-end)
+-- =========================================================
+-- Gießen
+-- =========================================================
 
-RegisterNetEvent('esx_uteknark:test_forest')
-AddEventHandler ('esx_uteknark:test_forest',function(forest)
-    local src = source
+RegisterNetEvent('esx_uteknark:waterPlant')
+AddEventHandler('esx_uteknark:waterPlant', function(plantID, nearLocation)
+    local src   = source
+    local plant = cropstate.index[plantID]
+    if not plant then
+        notify(src, 'Pflanze nicht gefunden.', 'error')
+        return
+    end
 
+    local dist = #(nearLocation - plant.bounds.location)
+    if dist > Config.Distance.Interact + 1.0 then
+        log(GetPlayerName(src), 'ist zu weit von Pflanze', plantID, 'entfernt')
+        return
+    end
 
-    if IsPlayerAceAllowed(src, 'command.uteknark') then
+    local waterItem = HasWaterItem(src)
+    if not waterItem then
+        notify(src, 'Du hast kein Wasser dabei! (' .. table.concat(Config.WaterItems, ', ') .. ')', 'error')
+        return
+    end
 
-        local soil
-        for candidate, quality in pairs(Config.Soil) do
-            soil = candidate
-            if quality >= 1.0 then
-                break
-            end
-        end
+    TakeItem(src, waterItem, 1)
+    cropstate:water(plantID)
 
-        log(GetPlayerName(src),'('..src..') is magically planting a forest of',#forest,'plants')
-        for i, tree in ipairs(forest) do
-            cropstate:plant(tree.location, soil, tree.stage)
-            if i % 25 == 0 then
-                Citizen.Wait(0)
-            end
-        end
+    local plant2 = cropstate.index[plantID]
+    if plant2 then
+        notify(src, 'Pflanze gegossen. (Gesamt: ' .. (plant2.data.water_count or 1) .. '×)', 'success')
     else
-        log('OY!', GetPlayerName(src),'with ID',src,'tried to spawn a test forest, BUT IS NOT ALLOWED!')
+        notify(src, 'Pflanze gegossen.', 'success')
     end
 end)
 
-function keyCount(tbl)
-    local count = 0
-    if type(tbl) == 'table' then
-        for key, value in pairs(tbl) do
-            count = count + 1
-        end
+-- =========================================================
+-- Düngen
+-- =========================================================
+
+RegisterNetEvent('esx_uteknark:fertilizePlant')
+AddEventHandler('esx_uteknark:fertilizePlant', function(plantID, nearLocation)
+    local src   = source
+    local plant = cropstate.index[plantID]
+    if not plant then
+        notify(src, 'Pflanze nicht gefunden.', 'error')
+        return
     end
-    return count
-end
+
+    local dist = #(nearLocation - plant.bounds.location)
+    if dist > Config.Distance.Interact + 1.0 then
+        log(GetPlayerName(src), 'ist zu weit von Pflanze', plantID, 'entfernt')
+        return
+    end
+
+    if not HasItem(src, Config.FertilizerItem) then
+        notify(src, 'Du hast keinen Dünger dabei!', 'error')
+        return
+    end
+
+    TakeItem(src, Config.FertilizerItem, 1)
+    cropstate:fertilize(plantID)
+
+    local plant2 = cropstate.index[plantID]
+    if plant2 then
+        notify(src, 'Pflanze gedüngt. (Gesamt: ' .. (plant2.data.fertilizer_count or 1) .. '×)', 'success')
+    else
+        notify(src, 'Pflanze gedüngt.', 'success')
+    end
+end)
+
+-- =========================================================
+-- Ernten
+-- =========================================================
+
+RegisterNetEvent('esx_uteknark:harvestPlant')
+AddEventHandler('esx_uteknark:harvestPlant', function(plantID, nearLocation)
+    local src   = source
+    local plant = cropstate.index[plantID]
+    if not plant then
+        notify(src, 'Pflanze nicht gefunden.', 'error')
+        return
+    end
+
+    local dist = #(nearLocation - plant.bounds.location)
+    if dist > Config.Distance.Interact + 1.0 then
+        log(GetPlayerName(src), 'ist zu weit von Pflanze', plantID, 'entfernt')
+        return
+    end
+
+    local strainKey  = plant.data.strain
+    local strainData = Config.Strains[strainKey]
+    if not strainData then
+        notify(src, 'Unbekannte Sorte.', 'error')
+        return
+    end
+
+    if not IsHarvestStage(strainKey, plant.data.stage) then
+        notify(src, 'Die Pflanze ist noch nicht erntereif!', 'error')
+        return
+    end
+
+    -- Qualität berechnen
+    local quality  = calcQuality(plant.data.water_count, plant.data.fertilizer_count)
+    local stars    = qualityLabel(quality)
+
+    -- Ertrag (Qualität beeinflusst keine Menge, aber das Produkt-Item trägt Qualitätsnamen)
+    local yield    = math.random(strainData.yield[1], strainData.yield[2])
+    local seedRet  = math.random(strainData.seedReturn[1], strainData.seedReturn[2])
+
+    -- Produkt geben
+    if not GiveItem(src, strainData.product, yield) then
+        notify(src, 'Dein Inventar ist voll!', 'error')
+        return
+    end
+
+    -- Samen zurückgeben
+    local seedsGiven = 0
+    if seedRet > 0 and GiveItem(src, strainData.seed, seedRet) then
+        seedsGiven = seedRet
+    end
+
+    cropstate:remove(plantID)
+    TriggerClientEvent('esx_uteknark:pyromaniac', -1, plant.bounds.location)
+
+    local msg = string.format(
+        '%s geerntet!\nErnte: %d× Weed | Samen: %d× zurück\nQualität: %s',
+        strainData.name, yield, seedsGiven, stars
+    )
+    notify(src, msg, 'success', 'Ernte')
+    log(GetPlayerName(src), 'erntete', strainData.name, '| Ertrag:', yield, '| Samen:', seedsGiven, '| Qualität:', quality)
+end)
+
+-- =========================================================
+-- Wild Weed Samen einsammeln
+-- =========================================================
+
+RegisterNetEvent('esx_uteknark:collectWildSeed')
+AddEventHandler('esx_uteknark:collectWildSeed', function(strainKey)
+    local src        = source
+    local strainData = Config.Strains[strainKey]
+    if not strainData then
+        notify(src, 'Unbekannte Sorte.', 'error')
+        return
+    end
+
+    if GiveItem(src, strainData.seed, 1) then
+        notify(src, strainData.name .. ' Samen eingesammelt!', 'success', 'Wild Weed')
+        log(GetPlayerName(src), 'sammelte wilden', strainData.name, 'Samen')
+    else
+        notify(src, 'Dein Inventar ist voll!', 'error')
+    end
+end)
+
+-- =========================================================
+-- Server-Tick: Wachstum
+-- =========================================================
+
+AddEventHandler('playerDropped', function()
+    lastPlant[source] = nil
+end)
 
 Citizen.CreateThread(function()
+    -- ESX laden
     local ESXTries = 60
-    local itemsLoaded = false
-    while not itemsLoaded and ESXTries > 0 do
+    while ESXTries > 0 do
         TriggerEvent('esx:getSharedObject', function(obj)
             ESX = obj
-            if keyCount(ESX.Items) > 0 then
-                itemsLoaded = true
-                for forWhat,itemName in pairs(Config.Items) do
-                    if ESX.Items[itemName] then
-                        log(forWhat,'item in configuration ('..itemName..') found in ESX: Good!')
-                    else
-                        log('WARNING:',forWhat,'item in cofiguration ('..itemName..') does not exist!')
-                    end
-                end
-                ESX.RegisterUsableItem(Config.Items.Seed, function(source)
-                    local now = os.time()
-                    local last = lastPlant[source] or 0
-                    if now > last + (Config.ActionTime/1000) then
-                        if HasItem(source, Config.Items.Seed) then
-                            TriggerClientEvent('esx_uteknark:attempt_plant', source)
-                            lastPlant[source] = now
-                        else
-                            makeToast(source, _U('planting_text'), _U('planting_no_seed'))
-                        end
-                    else
-                        makeToast(source, _U('planting_text'), _U('planting_too_fast'))
-                    end
-                end)
-            end
         end)
+        if ESX and next(ESX.Items) ~= nil then break end
         Citizen.Wait(1000)
         ESXTries = ESXTries - 1
     end
     if not ESX then
-        log("CRITICAL ERROR: Could not obtain ESX object!\n")
+        log('KRITISCH: ESX-Objekt konnte nicht geladen werden!')
+        return
+    end
+    log('ESX geladen.')
+
+    -- Alle Samen-Items registrieren
+    for strainKey, strainData in pairs(Config.Strains) do
+        local seedItem = strainData.seed
+        if ESX.Items[seedItem] then
+            ESX.RegisterUsableItem(seedItem, function(src)
+                local now  = os.time()
+                local last = lastPlant[src] or 0
+                if now < last + 3 then
+                    notify(src, 'Bitte warte einen Moment.', 'error')
+                    return
+                end
+                if HasItem(src, seedItem) then
+                    TriggerClientEvent('esx_uteknark:attempt_plant', src, strainKey)
+                    lastPlant[src] = now
+                else
+                    notify(src, 'Du hast keine ' .. strainData.name .. ' Samen.', 'error')
+                end
+            end)
+            log('Usable Item registriert:', seedItem, '(', strainData.name, ')')
+        else
+            log('WARNUNG: Item', seedItem, 'existiert nicht in ESX! Bitte in der Datenbank anlegen.')
+        end
     end
 end)
 
 Citizen.CreateThread(function()
-    local databaseReady = false
-    while not databaseReady do
+    -- Warten bis MySQL bereit
+    while GetResourceState('mysql-async') ~= 'started' do
         Citizen.Wait(500)
-        local state = GetResourceState('mysql-async')
-        if state == "started" then
-            Citizen.Wait(500)
-            cropstate:load(function(plantCount)
-                if plantCount == 1 then
-                    log('Uteknark loaded a single plant!')
-                else
-                    log('Uteknark loaded',plantCount,'plants')
-                end
-            end)
-            databaseReady = true
-        end
     end
+    Citizen.Wait(500)
+    cropstate:load(function(count)
+        log('Geladen:', count, 'Pflanzen')
+    end)
 
+    -- Wachstums-Tick
     while true do
         Citizen.Wait(0)
-        local now = os.time()
+        local now   = os.time()
         local begin = GetGameTimer()
-        local plantsHandled = 0
-        for id, plant in pairs(cropstate.index) do
-            if type(id) == 'number' then -- Because of the whole "hashtable = true" thing
-                local stageData = Growth[plant.data.stage]
-                local growthTime = (stageData.time * 60 * Config.TimeMultiplier)
-                local soilQuality = Config.Soil[plant.data.soil] or 1.0
+        local count = 0
 
-                if stageData.interact then
-                    local relevantTime = plant.data.time + ((growthTime / soilQuality) * Config.TimeMultiplier)
-                    if now >= relevantTime then
-                        verbose('Plant',id,'has died: No interaction in time')
-                        cropstate:remove(id)
-                    end
-                else
-                    local relevantTime = plant.data.time + ((growthTime * soilQuality) * Config.TimeMultiplier)
-                    if now >= relevantTime then
-                        if plant.data.stage < #Growth then
-                            verbose('Plant',id,'has grown to stage',plant.data.stage + 1)
-                            cropstate:update(id, plant.data.stage + 1)
-                        else
-                            verbose('Plant',id,'has died: Ran out of stages')
-                            cropstate:remove(id)
+        for id, plant in pairs(cropstate.index) do
+            if type(id) == 'number' then
+                local strainKey  = plant.data.strain
+                local strainData = Config.Strains[strainKey]
+                if strainData then
+                    local stageData = strainData.stages[plant.data.stage]
+                    if stageData and not stageData.harvest then
+                        local growthSecs = stageData.time * 60 * Config.TimeMultiplier
+                        local relevantTime = plant.data.time + growthSecs
+                        if now >= relevantTime then
+                            local nextStage = plant.data.stage + 1
+                            if nextStage <= #strainData.stages then
+                                verbose('Pflanze', id, '(', strainKey, ') wächst auf Stage', nextStage)
+                                cropstate:update(id, nextStage)
+                            else
+                                verbose('Pflanze', id, 'hat keine weiteren Stages')
+                                cropstate:remove(id)
+                            end
                         end
                     end
                 end
-
-                plantsHandled = plantsHandled + 1
-                if plantsHandled % 10 == 0 then
-                    Citizen.Wait(0)
-                end
+                count = count + 1
+                if count % 10 == 0 then Citizen.Wait(0) end
             end
         end
 
-        tickPlantCount = plantsHandled
+        tickPlantCount = count
         local tickTime = GetGameTimer() - begin
         table.insert(tickTimes, tickTime)
-        while #tickTimes > 20 do
-            table.remove(tickTimes, 1)
-        end
+        while #tickTimes > 20 do table.remove(tickTimes, 1) end
+
+        Citizen.Wait(10000) -- Alle 10 Sekunden prüfen
     end
 end)
 
+-- =========================================================
+-- Admin-Befehle
+-- =========================================================
+
+local function inChat(target, message)
+    if target == 0 then
+        log(message)
+    else
+        TriggerClientEvent('chat:addMessage', target, { args = { 'UteKnark', message } })
+    end
+end
+
 local commands = {
-    debug = function(source, args)
-        if source == 0 then
-            log('Client debugging on the console? Nope.')
-        else
-            TriggerClientEvent('esx_uteknark:toggle_debug', source)
-        end
+    debug = function(src)
+        if src == 0 then log('Debug nur für Clients.') return end
+        TriggerClientEvent('esx_uteknark:toggle_debug', src)
+        inChat(src, 'Debug toggled.')
     end,
-    stage = function(source, args)
-        if args[1] and string.match(args[1], "^%d+$") then
-            local plant = tonumber(args[1])
-            if cropstate.index[plant] then
-                if args[2] and string.match(args[2], "^%d+$") then
-                    local stage = tonumber(args[2])
-                    if stage > 0 and stage <= #Growth then
-                        log(source,GetPlayerName(source),'set plant',plant,'to stage',stage)
-                        cropstate:update(plant, stage)
-                    else
-                        inChat(source, string.format("%i is an invalid stage", stage))
-                    end
-                else
-                    inChat(source, "What stage?")
-                end
-            else
-                inChat(source,string.format("Plant %i does not exist!", plant))
-            end
-        else
-            inChat(source, "What plant, you say?")
-        end
-    end,
-    forest = function(source, args)
-        if source == 0 then
-            log('Forests can\'t grow in a console, buddy!')
-        else
 
-            local count = #Growth * #Growth
-            if args[1] and string.match(args[1], "%d+$") then
-                count = tonumber(args[1])
-            end
+    stats = function(src)
+        if #tickTimes == 0 then inChat(src, 'Noch keine Tick-Daten.') return end
+        local total = 0
+        for _, t in ipairs(tickTimes) do total = total + t end
+        inChat(src, string.format('Tick avg: %.1fms | Pflanzen: %d', total / #tickTimes, tickPlantCount))
+    end,
 
-            local randomStage = false
-            if args[2] then randomStage = true end
-
-            TriggerClientEvent('esx_uteknark:test_forest', source, count, randomStage)
-
+    strains = function(src)
+        inChat(src, 'Verfügbare Sorten:')
+        for key, data in pairs(Config.Strains) do
+            inChat(src, string.format('  %s → Samen: %s | Produkt: %s', data.name, data.seed, data.product))
         end
     end,
-    stats = function(source, args)
-        if cropstate.loaded then
-            local totalTime = 0
-            for i,time in ipairs(tickTimes) do
-                totalTime = totalTime + time
-            end
-            local tickTimeAverage = totalTime / #tickTimes
-            inChat(source, string.format("Tick time average: %.1fms", tickTimeAverage))
-            inChat(source, string.format("Plant count: %i", tickPlantCount))
-        else
-            inChat(source,'Not loaded yet')
-        end
-    end,
-    groundmat = function(source, args)
-        if source == 0 then
-            log('Console. The ground material is CONSOLE.')
-        else
-            TriggerClientEvent('esx_uteknark:groundmat', source)
-        end
-    end,
-    pyro = function(source, args)
-        if source == 0 then
-            log('You can\'t really test particle effects on the console.')
-        else
-            TriggerClientEvent('esx_uteknark:pyromaniac', source)
-        end
+
+    verbose = function(src)
+        VERBOSE = not VERBOSE
+        inChat(src, 'Verbose: ' .. tostring(VERBOSE))
     end,
 }
 
-RegisterCommand('uteknark', function(source, args, raw)
-    if #args > 0 then
-        local directive = string.lower(args[1])
-        if commands[directive] then
-            if #args > 1 then
-                local newArgs = {}
-                for i,entry in ipairs(args) do
-                    if i > 1 then
-                        table.insert(newArgs, entry)
-                    end
-                end
-                args = newArgs
-            else
-                args = {}
-            end
-            commands[directive](source,args)
-        elseif source == 0 then
-            log('Invalid directive: ' .. directive)
-        else
-            inChat(source,_U('command_invalid', directive))
-        end
-    else
-        inChat(source, _U('command_empty', VERSION))
+RegisterCommand('uteknark', function(src, args)
+    if #args == 0 then
+        inChat(src, 'UteKnark v' .. VERSION .. ' | Befehle: debug, stats, strains, verbose')
+        return
     end
-end,true)
+    local directive = string.lower(args[1])
+    if commands[directive] then
+        commands[directive](src)
+    else
+        inChat(src, 'Unbekannter Befehl: ' .. directive)
+    end
+end, true)

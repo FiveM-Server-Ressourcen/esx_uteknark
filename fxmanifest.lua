@@ -1,7 +1,9 @@
-resource_manifest_version '44febabe-d386-4d18-afbe-5e627f4af937'
-description 'ESX UteKnark Extended by DemmyDemon & community'
+fx_version 'cerulean'
+game 'gta5'
 
-dependencies { 'es_extended', 'mysql-async', 'ox_lib' }
+description 'ESX UteKnark - Extended Weed System'
+version '2.0.0'
+author 'DemmyDemon (extended)'
 
 shared_scripts {
     '@ox_lib/init.lua',
@@ -15,11 +17,17 @@ shared_scripts {
 
 client_scripts {
     'lib/debug.lua',
+    'lib/wildweed.lua',
     'cl_uteknark.lua',
-    'cl_wildweed.lua',
 }
 
 server_scripts {
     '@mysql-async/lib/MySQL.lua',
     'sv_uteknark.lua',
+}
+
+dependencies {
+    'es_extended',
+    'mysql-async',
+    'ox_lib',
 }

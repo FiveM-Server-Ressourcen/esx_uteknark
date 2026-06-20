@@ -1,505 +1,410 @@
-local table = table
-local plantingTargetOffset = vector3(0,2,-3)
-local plantingSpaceAbove = vector3(0,0,Config.Distance.Above)
-local rayFlagsLocation = 17
-local rayFlagsObstruction = 273
+local table        = table
 local activePlants = {}
+local inAction     = false  -- prevents overlapping progress bars
 
-local registerStrings = {
-    'status_active',
-    'status_passive',
-}
+-- Shared flag: cl_wildweed.lua reads this so both files
+-- never fight over the same lib.showTextUI slot.
+_uteknark_near_plant = false
 
-for i,entry in ipairs(registerStrings) do
-    AddTextEntry('uteknark_'..entry, _U(entry))
+-- ── Animation dicts ───────────────────────────────────────────────────────
+
+local ANIM_GARDEN = { dict = 'amb@world_human_gardener_plant@male@idle_a', clip = 'idle_a',   flag = 1 }
+local ANIM_PICKUP = { dict = 'pickup_object',                              clip = 'pickup_low', flag = 1 }
+
+-- ── ox_lib notification wrapper ───────────────────────────────────────────
+
+local function notify(msg, ntype)
+    lib.notify({
+        title       = 'UteKnark',
+        description = msg,
+        type        = ntype or 'inform',
+        duration    = 4000,
+    })
 end
 
-function interactHelp(stage,action)
-    BeginTextCommandDisplayHelp('uteknark_status_active')
-    AddTextComponentInteger(stage)
-    AddTextComponentInteger(#Growth)
-    AddTextComponentSubstringPlayerName(action)
-    EndTextCommandDisplayHelp(0, false, false, 1)
-end
-function passiveHelp(stage,status)
-    BeginTextCommandDisplayHelp('uteknark_status_passive')
-    AddTextComponentInteger(stage)
-    AddTextComponentInteger(#Growth)
-    AddTextComponentSubstringPlayerName(status)
-    EndTextCommandDisplayHelp(0, false, false, 1)
-end
+-- ── Burn / particle effect ────────────────────────────────────────────────
 
-function makeToast(subject,message)
-    local dict = 'bkr_prop_weed'
-    local icon = 'prop_cannabis_leaf_dprop_cannabis_leaf_a'
-    if not HasStreamedTextureDictLoaded(dict) then
-        RequestStreamedTextureDict(dict)
-        while not HasStreamedTextureDictLoaded(dict) do
+RegisterNetEvent('esx_uteknark:pyromaniac')
+AddEventHandler('esx_uteknark:pyromaniac', function(location)
+    if not Config.Burn.Enabled then return end
+    local myLoc = GetEntityCoords(PlayerPedId())
+    if not location then location = myLoc + vector3(0, 0, -1) end
+    if #(location - myLoc) > Config.Distance.Draw then return end
+    Citizen.CreateThread(function()
+        local begin = GetGameTimer()
+        RequestNamedPtfxAsset(Config.Burn.Collection)
+        while not HasNamedPtfxAssetLoaded(Config.Burn.Collection) and GetGameTimer() < begin + 5000 do
             Citizen.Wait(0)
         end
-    end
+        UseParticleFxAsset(Config.Burn.Collection)
+        local handle = StartParticleFxLoopedAtCoord(
+            Config.Burn.Effect, location + Config.Burn.Offset,
+            Config.Burn.Rotation, Config.Burn.Scale, false, false, false
+        )
+        while GetGameTimer() < begin + Config.Burn.Duration do Citizen.Wait(0) end
+        StopParticleFxLooped(handle, 0)
+        RemoveNamedPtfxAsset(Config.Burn.Collection)
+    end)
+end)
 
-    -- BeginTextCommandThefeedPost("STRING")
-    SetNotificationTextEntry("STRING")
-    AddTextComponentSubstringPlayerName(message)
-    --EndTextCommandThefeedPostMessagetext(
-    SetNotificationMessage(
-        dict, -- texture dict
-        icon, -- texture name
-        true, -- fade
-        0, -- icon type
-        'UteKnark', -- Sender
-        subject
-    )
-    --EndTextCommandThefeedPostTicker(
-    DrawNotification(
-        false, -- important
-        false -- has tokens
-    )
-    SetStreamedTextureDictAsNoLongerNeeded(icon)
-end
-
-function serverlog(...)
-    TriggerServerEvent('esx_uteknark:log',...)
-end
-
+-- Legacy toast → ox_lib notify bridge
 RegisterNetEvent('esx_uteknark:make_toast')
-AddEventHandler ('esx_uteknark:make_toast', function(subject,message)
-    makeToast(subject, message)
+AddEventHandler('esx_uteknark:make_toast', function(_, message)
+    notify(message)
 end)
 
+-- ── Plant prop spawner ────────────────────────────────────────────────────
 
-function flatEnough(surfaceNormal)
-    local x = math.abs(surfaceNormal.x)
-    local y = math.abs(surfaceNormal.y)
-    local z = math.abs(surfaceNormal.z)
-    return (
-        x <= Config.MaxGroundAngle
-        and
-        y <= Config.MaxGroundAngle
-        and
-        z >= 1.0 - Config.MaxGroundAngle
-    )
-end
+local function spawnPlantProp(entry)
+    local stage  = entry.data.stage  or 1
+    local strain = entry.data.strain or 'og_kush'
+    local model  = GetPlantModel(strain, stage)
 
-function getPlantingLocation(visible)
-
-    -- TODO: Refactor this *monster*, plx!
-    local ped = PlayerPedId()
-
-    if IsPedInAnyVehicle(ped) then
-        return false, 'planting_in_vehicle' -- The rest can all nil out
+    if not model or not IsModelValid(model) then
+        model = `prop_mp_cone_01`
     end
-
-    local playerCoord = GetEntityCoords(ped)
-    local target = GetOffsetFromEntityInWorldCoords(ped, plantingTargetOffset)
-    local testRay = StartShapeTestRay(playerCoord, target, rayFlagsLocation, ped, 7) -- This 7 is entirely cargo cult. No idea what it does.
-    local _, hit, hitLocation, surfaceNormal, material, _ = GetShapeTestResultEx(testRay)
-
-    if hit == 1 then
-        debug('Material:', material)
-        debug('Hit location:', hitLocation)
-        debug('Surface normal:', surfaceNormal)
-
-        if Config.Soil[material] then
-            debug('Soil quality:',Config.Soil[material])
-            if flatEnough(surfaceNormal) then
-                local plantDistance = #(playerCoord - hitLocation)
-                debug(plantDistance)
-                if plantDistance <= Config.Distance.Interact then
-                    local hits = cropstate.octree:searchSphere(hitLocation, Config.Distance.Space)
-                    if #hits > 0 then
-                        debug('Found another plant too close')
-                        if visible then
-                            for i, hit in ipairs(hits) do
-                                DrawLine(hitLocation, hit.bounds.location, 255, 0, 255, 100)
-                            end
-                            DebugSphere(hitLocation, 0.1, 255, 0, 255, 100)
-                            DrawLine(playerCoord, hitLocation, 255, 0, 255, 100)
-                        end
-                        return false, 'planting_too_close', hitLocation, surfaceNormal, material
-                    else
-                        if visible then
-                            DebugSphere(hitLocation, 0.1, 0, 255, 0, 100)
-                            DrawLine(playerCoord, hitLocation, 0, 255, 0, 100)
-                        end
-                        local aboveTarget = hitLocation + plantingSpaceAbove
-                        local aboveRay = StartShapeTestRay(hitLocation, aboveTarget, rayFlagsObstruction, ped, 7)
-                        local _,hitAbove,hitAbovePoint = GetShapeTestResult(aboveRay)
-                        if hitAbove == 1 then
-                            if visible then
-                                debug('Obstructed above')
-                                DrawLine(hitLocation, hitAbovePoint, 255, 0, 0, 100)
-                                DebugSphere(hitAbovePoint, 0.1, 255, 0, 0, 100)
-                            end
-                            return false, 'planting_obstructed', hitLocation, surfaceNormal, material
-                        else
-                            if visible then
-                                DrawLine(hitLocation, aboveTarget, 0, 255, 0, 100)
-                                DebugSphere(hitAbovePoint, 0.1, 255, 0, 0, 100)
-                                debug('~g~planting OK')
-                            end
-                            return true,'planting_ok', hitLocation, surfaceNormal, material
-                        end
-                    end
-                else
-                    if visible then
-                        DebugSphere(hitLocation, 0.1, 0, 128, 0, 100)
-                        DrawLine(playerCoord, hitLocation, 0, 128, 0, 100)
-                        debug('Target too far away')
-                    end
-                    return false, 'planting_too_far', hitLocation, surfaceNormal, material
-                end
-            else
-                if visible then
-                    DebugSphere(hitLocation, 0.1, 0, 0, 255, 100)
-                    DrawLine(playerCoord, hitLocation, 0, 0, 255, 100)
-                    debug('Location too steep')
-                end
-                return false, 'planting_too_steep', hitLocation, surfaceNormal, material
-            end
-        else
-            if visible then
-                debug('Not plantable soil')
-                DebugSphere(hitLocation, 0.1, 255, 255, 0, 100)
-                DrawLine(playerCoord, hitLocation, 255, 255, 0, 100)
-            end
-            return false, 'planting_not_suitable_soil', hitLocation, surfaceNormal, material
-        end
-    else
-        if visible then
-            debug('Ground not found')
-            DrawLine(playerCoord, target, 255, 0, 0, 255)
-        end
-        return false, 'planting_too_steep', hitLocation, surfaceNormal, material
-    end
-
-end
-
-function GetHeadingFromPoints(a, b)
-
-    if not a or not b then
-        return 0.0
-    end
-    if a.x == b.x and a.y == b.y then
-        return 0.0
-    end
-    if #(a - b) < 1 then
-        return 0.0
-    end
-
-    local theta = math.atan(b.x - a.x,a.y - b.y)
-    if theta < 0.0 then
-        theta = theta + (math.pi * 2)
-    end
-    return math.deg(theta) + 180 % 360
-end
-
-local inScenario = false
-local WEAPON_UNARMED = `WEAPON_UNARMED`
-local lastAction = 0
-function RunScenario(name, facing)
-    local playerPed = PlayerPedId()
-    ClearPedTasks(playerPed)
-    SetCurrentPedWeapon(playerPed, WEAPON_UNARMED)
-    if facing then
-        local heading = GetHeadingFromPoints(GetEntityCoords(playerPed), facing)
-        SetEntityHeading(playerPed, heading)
-        Citizen.Wait(0) -- So it syncs before we start the scenario!
-    end
-    TaskStartScenarioInPlace(playerPed, name, 0, true)
-    inScenario = true
-end
-
-RegisterNetEvent('esx_uteknark:do')
-AddEventHandler ('esx_uteknark:do', function(scenarioName, location)
-    if Config.Scenario[scenarioName] then
-        print("Got order for scenario " .. scenarioName)
-        Citizen.CreateThread(function()
-            local begin = GetGameTimer()
-            RunScenario(Config.Scenario[scenarioName], location)
-            while GetGameTimer() <= begin + Config.ScenarioTime do
-                Citizen.Wait(0)
-            end
-            if inScenario then
-                ClearPedTasks(PlayerPedId())
-            end
-            inScenario = false
-            print("Scenario "..scenarioName.." ends")
-        end)
-    else
-        print("Got ordered to do invalid scenario "..scenarioName)
-    end
-end)
-
-RegisterNetEvent('esx_uteknark:attempt_plant')
-AddEventHandler ('esx_uteknark:attempt_plant', function()
-    local plantable, message, location, _, soil = getPlantingLocation()
-    if plantable then
-        TriggerServerEvent('esx_uteknark:success_plant', location, soil)
-        lastAction = GetGameTimer()
-    else
-        makeToast(_U('planting_text'), _U(message))
-    end
-end)
-
-function DrawIndicator(location, color)
-    local range = 1.0
-    DrawMarker(
-        6, -- type (6 is a vertical and 3D ring)
-        location,
-        0.0, 0.0, 0.0, -- direction (?)
-        -90.0, 0.0, 0.0, -- rotation (90 degrees because the right is really vertical)
-        range, range, range, -- scale
-        color[1], color[2], color[3], color[4],
-        false, -- bob
-        false, -- face camera
-        2, -- dunno, lol, 100% cargo cult
-        false, -- rotates
-        0, 0, -- texture
-        false -- Projects/draws on entities
-    )
-end
-
-Citizen.CreateThread(function()
-    local drawDistance = Config.Distance.Draw
-    drawDistance = drawDistance * 1.01 -- So they don't fight about it, culling is at a slightly longer range
-    while true do
-        local now = GetGameTimer()
-        local playerPed = PlayerPedId()
-
-        if inScenario then
-            debug('In scenario', inScenario)
-        end
-
-        if #activePlants > 0 then
-            debug(#activePlants,'active plants')
-            local myLocation = GetEntityCoords(playerPed)
-            local closestDistance
-            local closestPlant
-            local closestIndex
-            for i,plant in ipairs(activePlants) do
-                local distance = #(plant.at - myLocation)
-                if not DoesEntityExist(plant.object) then
-                    table.remove(activePlants, i)
-                elseif distance > drawDistance then
-                    DeleteObject(plant.object)
-                    plant.node.data.object = nil
-                    table.remove(activePlants, i)
-                elseif not closestDistance or distance < closestDistance then
-                    closestDistance = distance
-                    closestPlant = plant
-                    closestIndex = i
-                end
-            end
-            if closestDistance and not IsPedInAnyVehicle(playerPed) then
-                debug('Closest plant at',closestDistance,'meters')
-                if closestDistance <= Config.Distance.Interact then
-                    local stage = Growth[closestPlant.stage]
-                    debug('Closest plant has ID',closestPlant.id)
-                    debug('Closest pant is stage', closestPlant.stage)
-                    DrawIndicator(closestPlant.at + stage.marker.offset, stage.marker.color)
-                    debug('Within intraction distance!')
-                    DisableControlAction(0, 44, true) -- Disable INPUT_COVER, as it's used to destroy plants
-                    if now >= lastAction + Config.ActionTime then
-                        if IsDisabledControlJustPressed(0, 44) then
-                            lastAction = now
-                            table.remove(activePlants, closestIndex)
-                            DeleteObject(closestPlant.object)
-                            TriggerServerEvent('esx_uteknark:remove', closestPlant.id, myLocation)
-                        else
-                            if stage.interact then
-                                interactHelp(closestPlant.stage, _U(stage.label))
-                                if IsControlJustPressed(0, 38) then
-                                    lastAction = now
-                                    TriggerServerEvent('esx_uteknark:frob', closestPlant.id, myLocation)
-                                end
-                            else
-                                passiveHelp(closestPlant.stage, _U(stage.label))
-                            end
-                        end
-                    end
-                end
-            end
+    if not HasModelLoaded(model) then
+        RequestModel(model)
+        local t = GetGameTimer()
+        while not HasModelLoaded(model) and GetGameTimer() < t + 2500 do
             Citizen.Wait(0)
-        else
-            Citizen.Wait(500)
         end
     end
-end)
+    if not HasModelLoaded(model) then
+        Citizen.Trace('UteKnark: Failed to load model for plant ' .. tostring(entry.data.id) .. '\n')
+        return
+    end
+
+    local offset = (Growth[stage] and Growth[stage].offset) or vector3(0, 0, 0)
+    local weed   = CreateObject(model, entry.bounds.location + offset, false, false, false)
+    SetEntityHeading(weed, math.random(0, 359) * 1.0)
+    FreezeEntityPosition(weed, true)
+    SetEntityCollision(weed, false, true)
+    if Config.SetLOD then
+        SetEntityLodDist(weed, math.floor(Config.Distance.Draw))
+    end
+    table.insert(activePlants, {
+        node   = entry,
+        object = weed,
+        at     = entry.bounds.location,
+        stage  = stage,
+        strain = strain,
+        id     = entry.data.id,
+    })
+    entry.data.object = weed
+    SetModelAsNoLongerNeeded(model)
+end
+
+-- ── Scan octree and spawn nearby props (background loop) ──────────────────
 
 Citizen.CreateThread(function()
-    local drawDistance = Config.Distance.Draw
+    local drawDist = Config.Distance.Draw * 1.01
     while true do
         local here = GetEntityCoords(PlayerPedId())
-        cropstate.octree:searchSphereAsync(here, drawDistance, function(entry)
+        cropstate.octree:searchSphereAsync(here, drawDist, function(entry)
             if not entry.data.object and not entry.data.deleted then
-                local stage = entry.data.stage or 1
-                local model = Growth[stage].model
-                if not model or not IsModelValid(model) then
-                    Citizen.Trace(tostring(model).." is not a valid model!\n")
-                    model = `prop_mp_cone_01`
-                end
-                if not HasModelLoaded(model) then
-                    RequestModel(model)
-                    local begin = GetGameTimer()
-                    while not HasModelLoaded(model) and GetGameTimer() < begin + 2500 do
-                        Citizen.Wait(0)
-                    end
-                end
-                if not HasModelLoaded(model) then
-                    Citizen.Trace("Failed to load model for growth stage " .. stage ..", but will retry shortly!\n")
-                    Citizen.Wait(2500)
-                else
-                    local offset = Growth[stage].offset or vector3(0,0,0)
-                    local weed = CreateObject(model, entry.bounds.location + offset, false, false, false)
-                    local heading = math.random(0,359) * 1.0
-                    SetEntityHeading(weed, heading)
-                    FreezeEntityPosition(weed, true)
-                    SetEntityCollision(weed, false, true)
-                    if Config.SetLOD then
-                        SetEntityLodDist(weed, math.floor(drawDistance))
-                    end
-                    table.insert(activePlants, {node=entry, object=weed, at=entry.bounds.location, stage=stage, id=entry.data.id})
-                    entry.data.object = weed
-                    SetModelAsNoLongerNeeded(model)
-                end
+                spawnPlantProp(entry)
             end
         end, true)
         Citizen.Wait(1500)
     end
 end)
 
+-- ── DrawIndicator (ring at plant base) ───────────────────────────────────
 
-function deleteActivePlants()
-    for i,plant in ipairs(activePlants) do
-        if DoesEntityExist(plant.object) then
-            DeleteObject(plant.object)
-        end
-    end
-    activePlants = {}
+local function DrawIndicator(location, color)
+    DrawMarker(6, location, 0.0, 0.0, 0.0, -90.0, 0.0, 0.0,
+        1.0, 1.0, 1.0,
+        color[1], color[2], color[3], color[4],
+        false, false, 2, false, 0, 0, false)
 end
 
+local function getStrainName(strain)
+    return (Config.Strains[strain] and Config.Strains[strain].name) or strain
+end
 
-AddEventHandler('onResourceStop', function(resourceName)
-    if resourceName == GetCurrentResourceName() then
-        deleteActivePlants()
-        if inScenario then
-            ClearPedTasksImmediately(PlayerPedId())
+-- ── ox_lib context menu for a planted plant ───────────────────────────────
+
+local function showPlantMenu(plant)
+    local stageData  = Growth[plant.stage]
+    local strainName = getStrainName(plant.strain)
+    local options    = {}
+
+    -- Primary stage action (tend or harvest)
+    if stageData and stageData.interact then
+        if stageData.yield then
+            table.insert(options, {
+                title       = _U('menu_harvest'),
+                description = _U('menu_harvest_desc'),
+                icon        = 'seedling',
+                onSelect    = function()
+                    if inAction then return end
+                    inAction = true
+                    Citizen.CreateThread(function()
+                        local ok = lib.progressBar({
+                            duration  = Config.ActionTime,
+                            label     = _U('harvest_progress'),
+                            canCancel = true,
+                            disable   = { move = true, car = true, combat = true },
+                            anim      = ANIM_GARDEN,
+                        })
+                        inAction = false
+                        if ok then
+                            TriggerServerEvent('esx_uteknark:frob', plant.id, GetEntityCoords(PlayerPedId()))
+                        end
+                    end)
+                end,
+            })
+        else
+            table.insert(options, {
+                title       = _U('menu_tend'),
+                description = _U('menu_tend_desc'),
+                icon        = 'hand',
+                onSelect    = function()
+                    if inAction then return end
+                    inAction = true
+                    Citizen.CreateThread(function()
+                        local ok = lib.progressBar({
+                            duration  = Config.ActionTime,
+                            label     = _U('tend_progress'),
+                            canCancel = true,
+                            disable   = { move = true, car = true, combat = true },
+                            anim      = ANIM_GARDEN,
+                        })
+                        inAction = false
+                        if ok then
+                            TriggerServerEvent('esx_uteknark:frob', plant.id, GetEntityCoords(PlayerPedId()))
+                        end
+                    end)
+                end,
+            })
         end
     end
-end)
 
-RegisterNetEvent('esx_uteknark:toggle_debug')
-AddEventHandler ('esx_uteknark:toggle_debug', function()
-    if not debug.active then
-        serverlog('enabled debugging')
-        debug.active = true
-    else
-        serverlog('disabled debugging')
-        debug.active = false
-    end
-end)
-
-RegisterNetEvent('esx_uteknark:pyromaniac')
-AddEventHandler ('esx_uteknark:pyromaniac',function(location)
-    if Config.Burn.Enabled then
-        local myLocation = GetEntityCoords(PlayerPedId())
-        if not location then
-            location = myLocation + vector3(0,0,-1) -- Because the ped location is one meter off the ground.
-        end
-        if #(location - myLocation) <= Config.Distance.Draw then
+    -- Water
+    table.insert(options, {
+        title       = _U('menu_water'),
+        description = _U('menu_water_desc'),
+        icon        = 'droplet',
+        onSelect    = function()
+            if inAction then return end
+            inAction = true
             Citizen.CreateThread(function()
-                local begin = GetGameTimer()
-                if not HasNamedPtfxAssetLoaded(Config.Burn.Effect) then
-                    RequestNamedPtfxAsset(Config.Burn.Collection)
-                    while not HasNamedPtfxAssetLoaded(Config.Burn.Collection) and GetGameTimer() <= begin + Config.Burn.Duration do
-                        Citizen.Wait(0)
-                    end
-                    if not HasNamedPtfxAssetLoaded(Config.Burn.Collection) then
-                        print("UteKnark failed to load particle effects asset "..Config.Burn.Collection)
-                    end
+                local ok = lib.progressBar({
+                    duration  = 5000,
+                    label     = _U('water_progress'),
+                    canCancel = true,
+                    disable   = { move = true, car = true, combat = true },
+                    anim      = ANIM_GARDEN,
+                })
+                inAction = false
+                if ok then
+                    TriggerServerEvent('esx_uteknark:water', plant.id, GetEntityCoords(PlayerPedId()))
                 end
-                UseParticleFxAsset(Config.Burn.Collection)
-                local handle = StartParticleFxLoopedAtCoord(Config.Burn.Effect, location + Config.Burn.Offset, Config.Burn.Rotation, Config.Burn.Scale * 1.0, false, false, false)
-                while GetGameTimer() <= begin + Config.Burn.Duration do
-                    Citizen.Wait(0)
-                end
-                StopParticleFxLooped(handle, 0)
-                RemoveNamedPtfxAsset(Config.Burn.Collection)
             end)
-        end
-    end
-end)
+        end,
+    })
+
+    -- Fertilize
+    table.insert(options, {
+        title       = _U('menu_fertilize'),
+        description = _U('menu_fertilize_desc'),
+        icon        = 'flask',
+        onSelect    = function()
+            if inAction then return end
+            inAction = true
+            Citizen.CreateThread(function()
+                local ok = lib.progressBar({
+                    duration  = 5000,
+                    label     = _U('fertilize_progress'),
+                    canCancel = true,
+                    disable   = { move = true, car = true, combat = true },
+                    anim      = ANIM_GARDEN,
+                })
+                inAction = false
+                if ok then
+                    TriggerServerEvent('esx_uteknark:fertilize', plant.id, GetEntityCoords(PlayerPedId()))
+                end
+            end)
+        end,
+    })
+
+    -- Destroy
+    table.insert(options, {
+        title       = _U('menu_destroy'),
+        description = _U('menu_destroy_desc'),
+        icon        = 'trash',
+        onSelect    = function()
+            if inAction then return end
+            inAction = true
+            Citizen.CreateThread(function()
+                local ok = lib.progressBar({
+                    duration  = Config.ActionTime,
+                    label     = _U('destroy_progress'),
+                    canCancel = true,
+                    disable   = { move = true, car = true, combat = true },
+                    anim      = ANIM_GARDEN,
+                })
+                inAction = false
+                if ok then
+                    local myLoc = GetEntityCoords(PlayerPedId())
+                    for i, p in ipairs(activePlants) do
+                        if p.id == plant.id then
+                            if DoesEntityExist(p.object) then DeleteObject(p.object) end
+                            table.remove(activePlants, i)
+                            break
+                        end
+                    end
+                    TriggerServerEvent('esx_uteknark:remove', plant.id, myLoc)
+                end
+            end)
+        end,
+    })
+
+    lib.registerContext({
+        id      = 'uteknark_plant_menu',
+        title   = strainName .. ' – Stage ' .. tostring(plant.stage) .. '/' .. tostring(#Growth),
+        options = options,
+    })
+    lib.showContext('uteknark_plant_menu')
+end
+
+-- ── Main plant interaction loop ───────────────────────────────────────────
 
 Citizen.CreateThread(function()
-    local ready = false
+    local drawDist = Config.Distance.Draw * 1.01
     while true do
-        if ready then
-            if debug.active then
-                local plantable, message, where, normal, material = getPlantingLocation(true)
-                if message then
-                    debug('Planting message:',_U(message))
+        local playerPed = PlayerPedId()
+
+        if #activePlants > 0 then
+            local myLoc           = GetEntityCoords(playerPed)
+            local closestDistance
+            local closestPlant
+
+            for i = #activePlants, 1, -1 do
+                local plant = activePlants[i]
+                local dist  = #(plant.at - myLoc)
+                if not DoesEntityExist(plant.object) then
+                    table.remove(activePlants, i)
+                elseif dist > drawDist then
+                    DeleteObject(plant.object)
+                    plant.node.data.object = nil
+                    table.remove(activePlants, i)
+                elseif not closestDistance or dist < closestDistance then
+                    closestDistance = dist
+                    closestPlant    = plant
                 end
-                debug:flush()
+            end
+
+            if closestPlant and closestDistance and not IsPedInAnyVehicle(playerPed) then
+                if closestDistance <= Config.Distance.Interact then
+                    local stageData = Growth[closestPlant.stage]
+                    if stageData then
+                        DrawIndicator(closestPlant.at + stageData.marker.offset, stageData.marker.color)
+                    end
+                    if not inAction then
+                        if not _uteknark_near_plant then
+                            _uteknark_near_plant = true
+                        end
+                        lib.showTextUI(_U('press_e_options'), { position = 'left-center', icon = 'cannabis' })
+                        if IsControlJustPressed(0, 38) then -- E key
+                            lib.hideTextUI()
+                            showPlantMenu(closestPlant)
+                        end
+                    end
+                else
+                    if _uteknark_near_plant then
+                        _uteknark_near_plant = false
+                        lib.hideTextUI()
+                    end
+                end
+            else
+                if _uteknark_near_plant then
+                    _uteknark_near_plant = false
+                    lib.hideTextUI()
+                end
             end
             Citizen.Wait(0)
         else
-            if NetworkIsSessionStarted() then
-                ready = true
-                cropstate:bulkData()
-            else
-                Citizen.Wait(100)
+            if _uteknark_near_plant then
+                _uteknark_near_plant = false
+                lib.hideTextUI()
             end
+            Citizen.Wait(500)
         end
     end
 end)
 
-RegisterNetEvent('esx_uteknark:groundmat')
-AddEventHandler ('esx_uteknark:groundmat', function()
-    local plantable, message, where, normal, material = getPlantingLocation(true)
-    TriggerEvent("chat:addMessage", {args={'Ground material', material}})
-    serverlog('Ground material:',material)
+-- ── Planting ──────────────────────────────────────────────────────────────
 
-    if Config.Soil[material] then
-        local quality = Config.Soil[material]
-        TriggerEvent("chat:addMessage", {args={'Soil quality', quality}})
-        serverlog('Soil quality:', quality)
-    else
-        TriggerEvent("chat:addMessage", {args={'Material not whitelisted'}})
-        serverlog('Material not whitelisted')
+local plantingOffset = vector3(0, 2, -3)
+
+local function getGroundLocation()
+    local ped = PlayerPedId()
+    if IsPedInAnyVehicle(ped) then return false, 'planting_in_vehicle' end
+
+    local from   = GetEntityCoords(ped)
+    local target = GetOffsetFromEntityInWorldCoords(ped, plantingOffset)
+    local ray    = StartShapeTestRay(from, target, 17, ped, 7)
+    local _, hit, hitLoc = GetShapeTestResult(ray)
+
+    if hit ~= 1 then return false, 'planting_no_ground' end
+    if #(from - hitLoc) > Config.Distance.Interact then return false, 'planting_too_far', hitLoc end
+
+    local hits = cropstate.octree:searchSphere(hitLoc, Config.Distance.Space)
+    if #hits > 0 then return false, 'planting_too_close', hitLoc end
+
+    return true, 'planting_ok', hitLoc
+end
+
+RegisterNetEvent('esx_uteknark:attempt_plant')
+AddEventHandler('esx_uteknark:attempt_plant', function(strainKey)
+    if inAction then return end
+    local ok, reason, location = getGroundLocation()
+    if not ok then
+        notify(_U(reason), 'error')
+        return
     end
+    local strainName = (Config.Strains[strainKey] and Config.Strains[strainKey].name) or strainKey
+    inAction = true
+    Citizen.CreateThread(function()
+        local success = lib.progressBar({
+            duration  = Config.ActionTime,
+            label     = _U('planting_progress', strainName),
+            canCancel = true,
+            disable   = { move = true, car = true, combat = true },
+            anim      = ANIM_GARDEN,
+        })
+        inAction = false
+        if success then
+            TriggerServerEvent('esx_uteknark:success_plant', location, strainKey)
+        end
+    end)
 end)
 
-RegisterNetEvent('esx_uteknark:test_forest')
-AddEventHandler ('esx_uteknark:test_forest',function(count, randomStage)
-    local origin = GetEntityCoords(PlayerPedId())
-    
-    TriggerEvent("chat:addMessage", {args={'UteKnark','Target forest size: '..count}})
-    local column = math.ceil(math.sqrt(count))
-    TriggerEvent("chat:addMessage", {args={'UteKnark','Column size: '..column}})
+-- ── Cleanup ────────────────────────────────────────────────────────────────
 
-    local offset = (column * Config.Distance.Space)/2
-    offset = vector3(-offset, -offset, 5)
-    local cursor = origin + offset
-    local planted = 0
-    local forest = {}
-    while planted < count do
-        local found, Z = GetGroundZFor_3dCoord(cursor.x, cursor.y, cursor.z, false)
-        if found then
-            local stage = (planted % #Growth) + 1
-            if randomStage then
-                stage = math.random(#Growth)
-            end
-            table.insert(forest, {location=vector3(cursor.x, cursor.y, Z), stage=stage})
-        end
-        cursor = cursor + vector3(0, Config.Distance.Space, 0)
-        planted = planted + 1
-        if planted % column == 0 then
-            Citizen.Wait(0)
-            cursor = cursor + vector3(Config.Distance.Space, -(Config.Distance.Space * column), 0)
-        end
+AddEventHandler('onResourceStop', function(name)
+    if name ~= GetCurrentResourceName() then return end
+    for _, plant in ipairs(activePlants) do
+        if DoesEntityExist(plant.object) then DeleteObject(plant.object) end
     end
-    TriggerEvent("chat:addMessage", {args={'UteKnark', 'Actual viable locations: '..#forest}})
-    TriggerServerEvent('esx_uteknark:test_forest', forest)
+    activePlants         = {}
+    _uteknark_near_plant = false
+    lib.hideTextUI()
+end)
+
+-- ── Debug toggle ──────────────────────────────────────────────────────────
+
+RegisterNetEvent('esx_uteknark:toggle_debug')
+AddEventHandler('esx_uteknark:toggle_debug', function()
+    debug.active = not debug.active
+    TriggerServerEvent('esx_uteknark:log', debug.active and 'enabled debug' or 'disabled debug')
+end)
+
+-- ── Session startup ────────────────────────────────────────────────────────
+
+Citizen.CreateThread(function()
+    while not NetworkIsSessionStarted() do Citizen.Wait(100) end
+    cropstate:bulkData()
 end)

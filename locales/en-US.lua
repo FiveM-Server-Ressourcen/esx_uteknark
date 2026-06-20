@@ -1,31 +1,44 @@
 Locales['en-US'] = {
-    planting_text = 'Planting',
-    planting_ok = 'Successfully planted!',
-    planting_in_vehicle = 'Drive-by weed? Seriously?',
-    planting_too_steep = 'Too steep, dude!',
-    planting_too_far = 'A little closer, please...',
-    planting_not_suitable_soil = 'It\'s not going to grow there...',
-    planting_too_close = 'Weed needs more space!',
-    planting_obstructed = 'Find somewhere with more light',
-    planting_no_seed = 'You don\'t have any seeds',
-    planting_failed = '~r~There was an error while planting',
-    planting_too_fast = 'Chillax, bro! Wait a little.',
+    -- Pflanzen
+    planting_text              = 'Pflanzen',
+    planting_ok                = 'Erfolgreich gepflanzt!',
+    planting_in_vehicle        = 'Im Fahrzeug kann nicht gepflanzt werden.',
+    planting_too_steep         = 'Der Boden ist zu steil!',
+    planting_too_far           = 'Etwas näher bitte...',
+    planting_not_suitable_soil = 'Hier wächst nichts...',
+    planting_too_close         = 'Die Pflanzen brauchen mehr Abstand!',
+    planting_obstructed        = 'Zu wenig Platz nach oben.',
+    planting_no_seed           = 'Du hast keine Samen.',
+    planting_no_flowerpot      = 'Du benötigst einen Blumentopf.',
+    planting_failed            = 'Fehler beim Pflanzen.',
+    planting_too_fast          = 'Bitte warte einen Moment.',
 
-    status_active = 'Stage ~1~/~1~~n~~INPUT_PICKUP~ ~a~~n~~INPUT_COVER~ Destroy',
-    status_passive = 'Stage ~1~/~1~~n~~a~~n~~INPUT_COVER~ Destroy',
+    -- Wasser & Dünger
+    water_start                = 'Du gießt die Pflanze...',
+    water_done                 = 'Pflanze wurde gegossen.',
+    water_no_item              = 'Du hast kein Wasser dabei!',
+    fertilize_start            = 'Du düngst die Pflanze...',
+    fertilize_done             = 'Pflanze wurde gedüngt.',
+    fertilize_no_item          = 'Du hast keinen Dünger dabei!',
 
-    growth_seedling = 'Freshly planted.~n~Will need attention soon!',
-    growth_tend = 'Tend plant',
-    growth_growing = 'Growing and doing fine.',
-    growth_yield = 'Harvest',
+    -- Ernte
+    harvest_start              = 'Du erntest die Pflanze...',
+    harvest_done               = '%s geerntet! Ernte: %d× | Samen: %d× | Qualität: %s',
+    harvest_not_ready          = 'Die Pflanze ist noch nicht erntereif!',
+    harvest_inventory_full     = 'Dein Inventar ist voll!',
 
-    command_invalid = 'Invalid directive: %s',
-    command_empty = 'Version %s',
+    -- Wild Weed
+    wild_collect_start         = 'Du sammelst Samen...',
+    wild_collect_done          = '%s Samen eingesammelt!',
+    wild_collect_fail          = 'Du hast die Pflanze beschädigt!',
+    wild_collect_cancel        = 'Einsammeln abgebrochen.',
 
-    interact_text = 'Plant interaction',
-    interact_tended = 'Plant tended',
-    interact_destroyed = 'Plant destroyed',
-    interact_harvested = 'Plant harvested: %i weed, %i seeds',
-    interact_full = 'You can\'t hold %i more weed!',
-    interact_missing_item = 'You don\'t have what you need to tend this plant!',
+    -- Vernichten
+    destroy_start              = 'Du vernichtest die Pflanze...',
+    destroy_done               = 'Pflanze vernichtet.',
+
+    -- Allgemein
+    command_invalid            = 'Unbekannter Befehl: %s',
+    command_empty              = 'UteKnark Version %s',
+    interact_text              = 'Pflanzen-Interaktion',
 }

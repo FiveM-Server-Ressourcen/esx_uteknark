@@ -1,0 +1,1 @@
+- [UteKnark v2 Architektur](uteknark-v2-arch.md) — Strain-basiertes Weed-System mit ox_lib; fxmanifest.lua ersetzt __resource.lua; cl_wildweed.lua ist ein unbenutzter Entwurf (nicht im Manifest)
